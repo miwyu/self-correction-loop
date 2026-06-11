@@ -1,0 +1,6 @@
+# Local files
+*.local.*
+local/
+
+# OS
+.DS_Store
