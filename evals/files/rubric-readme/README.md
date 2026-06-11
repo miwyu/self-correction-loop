@@ -1,0 +1,3 @@
+# wordfreq
+
+Counts words.

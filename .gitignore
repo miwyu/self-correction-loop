@@ -2,5 +2,12 @@
 *.local.*
 local/
 
+# Generated eval run outputs (regenerable; headline numbers go in commit messages)
+self-correction-loop-workspace/
+
 # OS
 .DS_Store
+
+# Python
+__pycache__/
+.pytest_cache/

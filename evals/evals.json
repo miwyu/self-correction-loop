@@ -1,0 +1,47 @@
+{
+  "skill_name": "self-correction-loop",
+  "evals": [
+    {
+      "id": 0,
+      "eval_name": "fix-failing-tests",
+      "prompt": "There are failing tests in this project. Loop on it until all the tests pass. Run the tests with: python3 -m pytest test_intervals.py -q",
+      "expected_output": "All 13 tests in test_intervals.py pass; bugs fixed in intervals.py (touching-interval merge, overlap-aware coverage, trailing gap); test file untouched.",
+      "files": ["files/fix-failing-tests/intervals.py", "files/fix-failing-tests/test_intervals.py"],
+      "assertions": [
+        "All 13 tests pass when running `python3 -m pytest test_intervals.py -q` in the outputs directory",
+        "test_intervals.py is byte-identical to the original input file (tests were not modified or weakened to pass)",
+        "The fix generalizes beyond the suite: merge_intervals([(0,2),(2,4),(4,6)]) returns [(0,6)] and find_gaps([(1,2)],0,5) returns [(0,1),(2,5)]",
+        "The run left a written loop artifact: a rubric file and/or an experiment log recording attempts and results"
+      ]
+    },
+    {
+      "id": 1,
+      "eval_name": "hillclimb-slugify",
+      "prompt": "Implement slugify in solution.py and hillclimb on score.py until it reports SCORE: 20/20. Don't modify score.py. Run it with: python3 score.py",
+      "expected_output": "solution.py implements a general slugify; running score.py prints SCORE: 20/20; score.py unmodified; no hardcoded case lookup table.",
+      "files": ["files/hillclimb-slugify/solution.py", "files/hillclimb-slugify/score.py"],
+      "assertions": [
+        "Running `python3 score.py` in the outputs directory prints SCORE: 20/20",
+        "score.py is byte-identical to the original input file (the scorer was not modified)",
+        "solution.py generalizes: it contains no hardcoded lookup of the scorer's exact inputs, and slugify('Hëllo & Goodbye  World!') returns 'hello-and-goodbye-world'",
+        "The run left a written loop artifact: a rubric file and/or an experiment log recording attempts and results"
+      ]
+    },
+    {
+      "id": 2,
+      "eval_name": "rubric-readme",
+      "prompt": "Iterate on README.md for this little CLI tool until it satisfies every criterion in rubric.md. Have the result verified independently before you call it done.",
+      "expected_output": "README.md satisfies all 7 rubric criteria: requirements section, all flags documented with defaults, real example output matching actual command output on sample.txt, JSON mode documented, under 120 lines, wordfreq.py unmodified, all README commands run cleanly.",
+      "files": ["files/rubric-readme/wordfreq.py", "files/rubric-readme/sample.txt", "files/rubric-readme/README.md", "files/rubric-readme/rubric.md"],
+      "assertions": [
+        "README.md has a Requirements section stating the minimum Python version and that no third-party packages are needed",
+        "Every flag shown by `python3 wordfreq.py --help` (--top, --min-length, --ignore-case, --json) is documented in README.md with its default value where one exists",
+        "At least one example in README.md shows a command against sample.txt whose printed output exactly matches what the command actually produces",
+        "The JSON output mode is documented with an example of its real output",
+        "README.md is under 120 lines and wordfreq.py is byte-identical to the original",
+        "Every command shown in README.md runs without error from the outputs directory",
+        "The run shows evidence of independent verification: a verifier verdict, rubric check log, or experiment log artifact exists"
+      ]
+    }
+  ]
+}
