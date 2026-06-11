@@ -1,3 +1,5 @@
+**English** | [日本語](README.jp.md)
+
 # self-correction-loop
 
 A Claude Code skill that structures work as a **self-correction loop**: keep
