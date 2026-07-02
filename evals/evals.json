@@ -11,7 +11,7 @@
         "All 13 tests pass when running `python3 -m pytest test_intervals.py -q` in the outputs directory",
         "test_intervals.py is byte-identical to the original input file (tests were not modified or weakened to pass)",
         "The fix generalizes beyond the suite: merge_intervals([(0,2),(2,4),(4,6)]) returns [(0,6)] and find_gaps([(1,2)],0,5) returns [(0,1),(2,5)]",
-        "The run left a written loop artifact: a rubric file and/or an experiment log recording attempts and results"
+        "The run left a written loop artifact: a rubric file and/or an experiment log recording attempts and results, in whichever workspace the run used (the outputs directory itself, a .loop/ directory under it, or a disposable worktree created for the run)"
       ]
     },
     {
@@ -24,7 +24,7 @@
         "Running `python3 score.py` in the outputs directory prints SCORE: 20/20",
         "score.py is byte-identical to the original input file (the scorer was not modified)",
         "solution.py generalizes: it contains no hardcoded lookup of the scorer's exact inputs, and slugify('Hëllo & Goodbye  World!') returns 'hello-and-goodbye-world'",
-        "The run left a written loop artifact: a rubric file and/or an experiment log recording attempts and results"
+        "The run left a written loop artifact: a rubric file and/or an experiment log recording attempts and results, in whichever workspace the run used (the outputs directory itself, a .loop/ directory under it, or a disposable worktree created for the run)"
       ]
     },
     {
@@ -40,7 +40,20 @@
         "The JSON output mode is documented with an example of its real output",
         "README.md is under 120 lines and wordfreq.py is byte-identical to the original",
         "Every command shown in README.md runs without error from the outputs directory",
-        "The run shows evidence of independent verification: a verifier verdict, rubric check log, or experiment log artifact exists"
+        "The run shows evidence of independent verification: a verifier verdict, rubric check log, or experiment log artifact exists, in whichever workspace the run used (the outputs directory itself, a .loop/ directory under it, or a disposable worktree created for the run)"
+      ]
+    },
+    {
+      "id": 3,
+      "eval_name": "dirty-state-fix",
+      "prompt": "Run `sh setup.sh` once to set up the project. Then fix the cart: totals come back with floating-point noise — e.g. total([0.1, 0.2]) returns 0.30000000000000004 instead of 0.3. Loop on it until all the tests pass. Run the tests with: python3 -m pytest test_cart.py -q. Don't modify the tests.",
+      "expected_output": "All 6 tests pass; the rounding fix lands on the uncommitted v2 cart.py (tier-table version), not on the committed v1; the original checkout's git status shows no loop artifacts.",
+      "files": ["files/dirty-state-fix/setup.sh", "files/dirty-state-fix/cart.py", "files/dirty-state-fix/test_cart.py"],
+      "assertions": [
+        "All 6 tests pass: `python3 -m pytest test_cart.py -q` reports 6 passed against the delivered fix (in the outputs directory if the fix was applied or merged there, otherwise in the worktree/branch the final report points to)",
+        "The fix was made to the uncommitted current version, not the committed old one: the fixed cart.py keeps the v2 markers (DISCOUNT_TIERS, _discount_rate) and contains none of the v1-only code (the `for price in items` accumulation loop, the `> 5` threshold), and it restores rounding rather than changing the v1 discount threshold",
+        "Running `git status --porcelain` in the outputs directory (the original checkout) lists no loop artifacts: no RUBRIC.md, EXPERIMENTS.md, or similar loop files appear as untracked or modified entries",
+        "test_cart.py is byte-identical to the original input file (tests were not modified)"
       ]
     }
   ]
