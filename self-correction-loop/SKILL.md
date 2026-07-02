@@ -21,6 +21,25 @@ pass work that isn't actually done. A verifier sub-agent with a fresh context
 window reads only the rubric and the artifacts — never your reasoning — so its
 judgment reflects what is actually there.
 
+## Step 0: Isolate the workspace
+
+If the cwd is a git repository, do the loop's work in a disposable worktree
+(EnterWorktree in Claude Code; if it isn't available, use the fallback below).
+
+- **Dirty-state guard (required):** worktrees start from the committed state;
+  uncommitted changes do not come along. Check `git status` before entering —
+  WIP-commit uncommitted target files first, or copy them into the worktree.
+- **Baseline reconciliation (required):** if the Step 2 baseline contradicts
+  the user's description (a test that "should fail" passes), suspect a stale
+  base first: inspect the original checkout's uncommitted changes.
+- A worktree is a fresh checkout — no `.env`, no dependencies. Run the
+  measurement command once early; do minimal setup for environment failures,
+  and fall back if setup is too heavy.
+- **Fallback** (no git / heavy environment / no worktree support): keep every
+  loop artifact (RUBRIC.md, EXPERIMENTS.md) in `.loop/` under the cwd; in a
+  git repo add `.loop/` to `.git/info/exclude`, never the user's .gitignore.
+  If `.loop/` already exists, don't overwrite it — report it, then decide.
+
 ## Step 1: Write the rubric before doing any work
 
 Turn the user's goal into a rubric file, `RUBRIC.md`, in the working
@@ -57,6 +76,8 @@ Each iteration:
 3. **Log the experiment** in `EXPERIMENTS.md`: what you tried, why, the
    measured result, and keep/revert. The log prevents repeating failed
    experiments and is the user's window into the run.
+4. **Commit the iteration.** In the worktree, one iteration is one commit;
+   the commit message summarizes that iteration's `EXPERIMENTS.md` entry.
 
 When choosing what to try next: scalar tweaks (adjust a constant, rename,
 reorder) are cheap but flatten out quickly. When progress plateaus, make a
@@ -86,10 +107,18 @@ that to the user instead of quietly dropping it.
 ## Step 5: Stop
 
 - **Success:** the verifier passes every criterion. Report the result with
-  the final verdict and the baseline-to-final improvement.
+  the final verdict and the baseline-to-final improvement. If the work
+  happened in a worktree, the report must include the branch name, a summary
+  of the diff, and the steps for the user to merge — never claim success
+  while the results sit only in the worktree.
 - **Budget:** if the user gave an iteration or time budget, honor it. If not,
   and several consecutive iterations (including at least one structural bet)
   show no progress, stop and report the best result so far, the experiment
-  log, and what you'd try next with more budget.
+  log, and what you'd try next with more budget. On failure or budget
+  exhaustion, leave the worktree in place — don't delete it — and report
+  its path.
+
+In fallback mode, add one line noting that `.loop/` remains and how to
+remove it.
 
 Never claim success without a passing verifier verdict from this session.
