@@ -16,13 +16,16 @@ Two observations about working with current models motivate the design:
    hard tasks.
 2. **Models grade their own work poorly.** After working on something, the
    model is anchored on its intentions rather than the artifact, so
-   self-critique tends to declare victory early. Grading in a *separate
-   context window* — a verifier sub-agent that sees only the rubric and the
+   self-critique tends to declare victory early. Grading in a _separate
+   context window_ — a verifier sub-agent that sees only the rubric and the
    artifacts, never the worker's reasoning — is markedly more reliable.
 
 The skill packages both ideas into a repeatable procedure, plus guard rails
 against the failure mode that loops invite: gaming the metric (weakening
-tests, editing the scorer, hardcoding expected outputs).
+tests, editing the scorer, hardcoding expected outputs). Work also stays out
+of your checkout: the loop runs in a disposable git worktree (with a
+dirty-state guard for uncommitted changes), falling back to a `.loop/`
+directory where worktrees aren't possible.
 
 ## When to use it
 
@@ -33,7 +36,7 @@ be solved in one attempt:
 - "Hillclimb on this benchmark / scorer until it reports 100."
 - "Iterate on this document until it satisfies the rubric."
 
-It is *not* useful for one-shot tasks or tasks with no checkable goal — the
+It is _not_ useful for one-shot tasks or tasks with no checkable goal — the
 loop's overhead (roughly 2–4× wall time in our benchmarks, mostly the
 verifier sub-agent) only pays off when there is something objective to
 converge on.
@@ -42,6 +45,10 @@ converge on.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
+│ 0. ISOLATE   Work in a disposable git worktree — or a    │
+│              .loop/ dir when worktrees aren't possible   │
+│              — so the loop never dirties your checkout   │
+├──────────────────────────────────────────────────────────┤
 │ 1. RUBRIC    Turn the goal into RUBRIC.md: objectively   │
 │              checkable criteria + anti-gaming guards     │
 │              ("tests not modified", "scorer untouched")  │
@@ -65,22 +72,15 @@ converge on.
 └──────────────────────────────────────────────────────────┘
 ```
 
-Every run leaves an audit trail in the working directory: `RUBRIC.md` (what
-"done" means, including the guards) and `EXPERIMENTS.md` (every attempt and
-its measured result), alongside the verifier's per-criterion verdict.
+Every run leaves an audit trail: `RUBRIC.md` (what "done" means, including
+the guards) and `EXPERIMENTS.md` (every attempt and its measured result),
+alongside the verifier's per-criterion verdict — kept out of your checkout,
+in the worktree (committed once per iteration) or in `.loop/`. On success
+the report includes the branch, a diff summary, and how to merge; on
+failure the worktree is left in place for inspection.
 
 The full instructions live in
 [self-correction-loop/SKILL.md](self-correction-loop/SKILL.md).
-
-## Installing
-
-Copy the skill directory into your skills folder:
-
-```bash
-cp -r self-correction-loop ~/.claude/skills/
-```
-
-Then prompts like "loop on this until the tests pass" will pick it up.
 
 ## This repository
 
