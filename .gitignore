@@ -2,6 +2,9 @@
 *.local.*
 local/
 
+# Agent tool local links and settings
+.claude/
+
 # Generated eval run outputs (regenerable; headline numbers go in commit messages)
 self-correction-loop-workspace/
 
