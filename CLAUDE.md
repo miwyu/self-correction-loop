@@ -98,8 +98,10 @@ rounding test.
 - `dirty-state-fix` doesn't discriminate with/without either — an inline fix
   never trips the trap. It exists to catch a future skill revision that
   worktrees naively from a stale HEAD.
-- Open skill gap from iteration 2: the eval-3 with-skill run merged the loop
-  artifacts (RUBRIC/EXPERIMENTS/VERDICT.md) into the fixture repo's main.
-  `git status` stays clean so the assertion passes as written, but the user's
-  checkout keeps process artifacts as tracked files. First candidate for the
-  next skill iteration: Step 5 should say to merge the fix only.
+- The iteration-2 open gap (eval-3 with-skill run merged loop artifacts into
+  the fixture repo's main) is closed as of commit `7a6e7c3`: Step 3.4 keeps
+  RUBRIC/EXPERIMENTS untracked and Step 5 hands back the fix only. Verified
+  by blank-slate executor runs, not yet re-measured by this eval suite.
+  Current top candidate for the next skill iteration: Step 1's guard
+  criteria should name the pre-work reference (commit SHA / checksum /
+  saved copy) that makes "X was not modified" checkable.
