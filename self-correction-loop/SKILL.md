@@ -1,9 +1,10 @@
 ---
 name: self-correction-loop
 description: >
-  Run a rubric-driven self-correction loop: iterate on a task, grade each
-  attempt with an independent verifier sub-agent, and keep going until every
-  criterion passes. Use this whenever the user explicitly asks to loop,
+  Run a rubric-driven self-correction loop: iterate on a task, check each
+  attempt against a measurable rubric, and claim completion only after an
+  independent verifier sub-agent confirms every criterion passes. Use this
+  whenever the user explicitly asks to loop,
   iterate, or hillclimb until something is done — e.g. "loop on this until
   the tests pass", "keep iterating until the score hits 100", "hillclimb on
   this benchmark", "iterate until it satisfies the rubric" — or otherwise
@@ -23,12 +24,17 @@ judgment reflects what is actually there.
 
 ## Step 0: Isolate the workspace
 
-If the cwd is a git repository, do the loop's work in a disposable worktree
-(EnterWorktree in Claude Code; if it isn't available, use the fallback below).
+If the cwd is a git repository, do the loop's work in a disposable worktree —
+via EnterWorktree in Claude Code, or `git worktree add` from the CLI if that
+tool isn't available (place CLI worktrees as a sibling of the repo, e.g.
+`../<repo>-loop`). Use the fallback below only when worktree isolation
+itself is impossible or too heavy, not merely because one tool is missing.
 
 - **Dirty-state guard (required):** worktrees start from the committed state;
   uncommitted changes do not come along. Check `git status` before entering —
-  WIP-commit uncommitted target files first, or copy them into the worktree.
+  prefer copying uncommitted target files into the worktree (it leaves the
+  user's branch and index untouched); a WIP commit also works but changes
+  their branch state, so reach for it only when a copy won't do.
 - **Baseline reconciliation (required):** if the Step 2 baseline contradicts
   the user's description (a test that "should fail" passes), suspect a stale
   base first: inspect the original checkout's uncommitted changes.
@@ -39,6 +45,10 @@ If the cwd is a git repository, do the loop's work in a disposable worktree
   loop artifact (RUBRIC.md, EXPERIMENTS.md) in `.loop/` under the cwd; in a
   git repo add `.loop/` to `.git/info/exclude`, never the user's .gitignore.
   If `.loop/` already exists, don't overwrite it — report it, then decide.
+  In fallback mode, later steps read through this: `.loop/` is where
+  Step 1's rubric lives, and the `EXPERIMENTS.md` entry stands in for
+  Step 3's per-iteration commit — never `git init` a repo the user
+  didn't ask for.
 
 ## Step 1: Write the rubric before doing any work
 
@@ -78,6 +88,9 @@ Each iteration:
    experiments and is the user's window into the run.
 4. **Commit the iteration.** In the worktree, one iteration is one commit;
    the commit message summarizes that iteration's `EXPERIMENTS.md` entry.
+   Commit only files the task is supposed to change — `RUBRIC.md` and
+   `EXPERIMENTS.md` are process artifacts; keep them untracked so no later
+   merge can carry them into the user's branch.
 
 When choosing what to try next: scalar tweaks (adjust a constant, rename,
 reorder) are cheap but flatten out quickly. When progress plateaus, make a
@@ -108,9 +121,19 @@ that to the user instead of quietly dropping it.
 
 - **Success:** the verifier passes every criterion. Report the result with
   the final verdict and the baseline-to-final improvement. If the work
-  happened in a worktree, the report must include the branch name, a summary
-  of the diff, and the steps for the user to merge — never claim success
-  while the results sit only in the worktree.
+  happened in a worktree, hand back the fix only: report the branch name, a
+  summary of the diff, and the exact steps to land the product changes
+  (merge the branch, or `git checkout <branch> -- <files>`). Prescribing
+  those steps is the default; apply the fix yourself only when losing user
+  work is provably impossible — the checkout is clean, or a diff shows the
+  user's uncommitted content is contained in what you apply — and say which
+  of the two you did. Give the user the cleanup commands to run once they
+  have reviewed the log: `git worktree remove --force <path>` (the
+  `--force` is expected — it is what deletes the untracked process
+  artifacts), then delete the branch. Never claim success without giving
+  the user a landing path — the fix already applied, or the branch plus
+  exact landing steps — and never let process artifacts ride along into
+  the user's checkout.
 - **Budget:** if the user gave an iteration or time budget, honor it. If not,
   and several consecutive iterations (including at least one structural bet)
   show no progress, stop and report the best result so far, the experiment
