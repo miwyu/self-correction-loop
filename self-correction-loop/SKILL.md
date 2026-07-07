@@ -1,147 +1,145 @@
 ---
 name: self-correction-loop
 description: >
-  Run a rubric-driven self-correction loop: iterate on a task, check each
-  attempt against a measurable rubric, and claim completion only after an
-  independent verifier sub-agent confirms every criterion passes. Use this
-  whenever the user explicitly asks to loop,
-  iterate, or hillclimb until something is done — e.g. "loop on this until
-  the tests pass", "keep iterating until the score hits 100", "hillclimb on
-  this benchmark", "iterate until it satisfies the rubric" — or otherwise
-  asks for verified, rubric-driven iteration toward a measurable goal.
+  Required for any request phrased "loop / iterate / hillclimb / keep fixing
+  / keep going until <measurable condition>" — e.g. "loop on this until the
+  tests pass", "hillclimb until the score hits 20/20", "iterate until it
+  satisfies the rubric" — and for any other request for verified,
+  rubric-driven iteration. Runs the loop: write a rubric with mechanical
+  checks, iterate with an experiment log, and claim completion only after an
+  independent verifier sub-agent returns OVERALL: PASS. The trigger is the
+  shape of the request ("... until <condition>"), never the task's
+  difficulty: solving in one attempt does not satisfy such a request, because
+  the deliverables include the rubric, the experiment log, and the
+  independent verdict — do not skip this skill because the fix looks obvious.
 ---
 
 # Self-Correction Loop
 
-Structure the work as a loop: attempt → measure → improve → repeat, and stop
-only when an **independent verifier** confirms every criterion is satisfied.
+Loop: attempt → measure → improve, stopping only when an independent verifier
+confirms every criterion. The procedure is below; the reasoning behind each
+rule is in `references/rationale.md` (read it when curious, not to run the loop).
 
-Why the independence matters: after working on something, you are anchored on
-your intentions rather than on the artifact itself, so self-critique tends to
-pass work that isn't actually done. A verifier sub-agent with a fresh context
-window reads only the rubric and the artifacts — never your reasoning — so its
-judgment reflects what is actually there.
+`<skill_dir>` = the directory containing this SKILL.md.
+`<ws>` = the workspace root chosen in Step 0. `<ws>/.loop/` holds all loop
+artifacts. Run every CHECK command from `<ws>`.
 
-## Step 0: Isolate the workspace
+## MUST / NEVER
 
-If the cwd is a git repository, do the loop's work in a disposable worktree —
-via EnterWorktree in Claude Code, or `git worktree add` from the CLI if that
-tool isn't available (place CLI worktrees as a sibling of the repo, e.g.
-`../<repo>-loop`). Use the fallback below only when worktree isolation
-itself is impossible or too heavy, not merely because one tool is missing.
+- **MUST M1:** claim success only after, in this session, `preflight.sh`
+  exited 0 **and then** a verifier sub-agent's report ended `OVERALL: PASS`
+  — in that order, both against the current state of the artifacts.
+- **MUST M2:** copy the three templates in `<skill_dir>/references/`
+  verbatim; replace only their placeholders.
+- **MUST M3:** change one thing per iteration, and log every iteration in
+  `EXPERIMENTS.md` before moving on.
+- **NEVER N1:** modify a file listed under `## Protected files` in RUBRIC.md.
+- **NEVER N2:** delete or "clean up" `.loop/`, RUBRIC.md, or EXPERIMENTS.md —
+  they are the user's audit trail; the user removes them after review.
+- **NEVER N3:** copy expected outputs, test cases, or scorer internals into
+  RUBRIC.md or into the solution.
+- **NEVER N4:** paraphrase, extend, or summarize-into the verifier prompt.
+- **NEVER N5:** `git init` a repo the user didn't ask for, or commit to the
+  user's branch.
+- **NEVER N6:** re-run rubric checks or re-inspect artifacts after the
+  verifier returns `OVERALL: PASS` — the verdict is final and already in your
+  context. The only tool use allowed after PASS is the git commands Step 5's
+  hand-back itself needs (diff summary, status check), nothing else.
 
-- **Dirty-state guard (required):** worktrees start from the committed state;
-  uncommitted changes do not come along. Check `git status` before entering —
-  prefer copying uncommitted target files into the worktree (it leaves the
-  user's branch and index untouched); a WIP commit also works but changes
-  their branch state, so reach for it only when a copy won't do.
-- **Baseline reconciliation (required):** if the Step 2 baseline contradicts
-  the user's description (a test that "should fail" passes), suspect a stale
-  base first: inspect the original checkout's uncommitted changes.
-- A worktree is a fresh checkout — no `.env`, no dependencies. Run the
-  measurement command once early; do minimal setup for environment failures,
-  and fall back if setup is too heavy.
-- **Fallback** (no git / heavy environment / no worktree support): keep every
-  loop artifact (RUBRIC.md, EXPERIMENTS.md) in `.loop/` under the cwd; in a
-  git repo add `.loop/` to `.git/info/exclude`, never the user's .gitignore.
-  If `.loop/` already exists, don't overwrite it — report it, then decide.
-  In fallback mode, later steps read through this: `.loop/` is where
-  Step 1's rubric lives, and the `EXPERIMENTS.md` entry stands in for
-  Step 3's per-iteration commit — never `git init` a repo the user
-  didn't ask for.
+## Step 0: Choose the workspace
 
-## Step 1: Write the rubric before doing any work
+1. If the cwd is **not** a git repository (or worktree isolation is
+   impossible/too heavy — e.g. heavy env setup a fresh checkout can't rerun):
+   `<ws>` = cwd. Skip to Step 1.
+2. If the cwd **is** a git repository: work in a disposable worktree — via
+   EnterWorktree in Claude Code, else `git worktree add ../<repo>-loop -b <branch>`
+   (sibling of the repo). `<ws>` = the worktree.
+   - **Dirty-state guard:** worktrees start from the committed state. Run
+     `git status` first; copy any uncommitted files the task touches into the
+     worktree (prefer copying over a WIP commit — it leaves the user's branch
+     and index untouched).
+   - Run the task's measurement command once early; a worktree is a fresh
+     checkout (no `.env`, no deps). Do minimal setup, or fall back to rule 1.
+   - **Baseline reconciliation:** if the Step 2 baseline contradicts the
+     user's description (a test that "should fail" passes), suspect a stale
+     base: inspect the original checkout's uncommitted changes.
 
-Turn the user's goal into a rubric file, `RUBRIC.md`, in the working
-directory. Every criterion must be objectively checkable — by running a
-command or by inspecting an artifact. A vague criterion ("code is clean")
-gives the verifier nothing to check and lets the loop stop early.
+## Step 1: Set up the loop workspace (before any work on the task)
 
-- If the goal already comes with a checkable signal (a test suite, a scorer
-  script, a lint command), that command is the core of the rubric. Record the
-  exact command and the required result.
-- Add **guard criteria** for the ways the goal could be satisfied by gaming
-  rather than solving: "the test files were not modified", "the scorer script
-  was not edited", "no expected outputs are hardcoded". The loop's pressure to
-  pass is exactly the pressure that produces these shortcuts, so name them
-  up front.
-- If part of the goal is genuinely qualitative, phrase it so a fresh reader
-  can answer yes/no from the artifact alone (e.g. "every CLI flag that appears
-  in `--help` has a description in the README").
+1. One command block (if `.loop/` already exists, stop and report instead;
+   skip the exclude line outside a git repo):
+   ```bash
+   test ! -e <ws>/.loop && mkdir -p <ws>/.loop \
+     && cp -R <skill_dir>/scripts <ws>/.loop/scripts \
+     && echo '.loop/' >> "$(git -C <ws> rev-parse --path-format=absolute --git-common-dir)/info/exclude" \
+     ; shasum -a 256 <ws>/<each protected file>
+   ```
+2. Read `<skill_dir>/references/rubric-template.md` and
+   `<skill_dir>/references/experiments-template.md` (both, now); create
+   `<ws>/.loop/RUBRIC.md` and `<ws>/.loop/EXPERIMENTS.md` from them.
+   Criteria must be objectively checkable; put the user's stated command
+   verbatim in a CHECK line. Add guard criteria for the ways the goal could
+   be gamed (test edits, scorer edits, hardcoded outputs): list each such
+   file under `## Protected files` with the sha256 recorded in step 1 —
+   **before any work**. Keep every CHECK a one-line command (pipe to
+   `grep -q`/`diff` as needed); if a check can't be one line, make it a
+   MANUAL criterion instead — do not write helper checker files. The loop's
+   only files are RUBRIC.md, EXPERIMENTS.md, and the copied `scripts/`.
 
-## Step 2: Establish a baseline
+## Step 2: Baseline
 
-Make one honest first attempt, then run the measurable check and record the
-result. The baseline tells you whether later changes are actually
-improvements, and it tells the user what the starting point was.
+Run the core CHECK command once before changing anything; record the verbatim
+result under `## Baseline` in EXPERIMENTS.md. The baseline is what later
+results are compared against, and what you reconcile in Step 0's guard.
 
 ## Step 3: Iterate
 
-Each iteration:
+Per iteration:
 
-1. **Change one thing.** Pick the idea you expect to help most. If you change
-   several things at once and the score moves, you won't know why.
-2. **Run the cheap checks yourself** (the test command, the scorer). Don't
-   spend a verifier run on an attempt you can already see failing.
-3. **Log the experiment** in `EXPERIMENTS.md`: what you tried, why, the
-   measured result, and keep/revert. The log prevents repeating failed
-   experiments and is the user's window into the run.
-4. **Commit the iteration.** In the worktree, one iteration is one commit;
-   the commit message summarizes that iteration's `EXPERIMENTS.md` entry.
-   Commit only files the task is supposed to change — `RUBRIC.md` and
-   `EXPERIMENTS.md` are process artifacts; keep them untracked so no later
-   merge can carry them into the user's branch.
+1. Change **one** thing (M3) — the change you expect to help most.
+2. Run the relevant CHECK commands yourself (cheap, no sub-agent).
+3. Append an `## Iteration N` block to EXPERIMENTS.md
+   (CHANGE / WHY / RESULT / DECISION — the template fixes the fields).
+4. In a worktree: commit the iteration — only files the task is supposed to
+   change (`.loop/` is excluded and stays untracked).
 
-When choosing what to try next: scalar tweaks (adjust a constant, rename,
-reorder) are cheap but flatten out quickly. When progress plateaus, make a
-structural bet — a different algorithm, a different representation, a
-reframing of the problem — even if it temporarily regresses the score. A
-plateau on the log is the signal to switch from tuning to restructuring.
+**Plateau rule:** if the metric has not improved for 3 consecutive
+iterations, the next iteration must be a structural change (different
+algorithm, representation, or framing), not another tweak. **Budget:** honor
+any user-given iteration/time budget; with none, stop and report after 3
+consecutive non-improving iterations that already include a structural
+change.
 
-## Step 4: Verify independently
+## Step 4: Preflight, then verify
 
-When you believe every criterion passes, spawn a verifier sub-agent with the
-Agent tool. Give it only the rubric and the paths to the artifacts — not your
-summary of what you did or why it should pass. A useful template:
+1. Run `bash <ws>/.loop/scripts/preflight.sh <ws>/.loop`.
+   Exit 0 required; on failure, fix and return to Step 3. Do not spawn a
+   verifier while preflight fails.
+2. Read `<skill_dir>/references/verifier-prompt.md`. Replace `{{LOOP_DIR}}`
+   with the absolute path of `<ws>/.loop` — the only edit allowed (N4) — and
+   spawn a verifier sub-agent (Agent tool) with that text. Never include your
+   summary, diff, or reasoning.
+3. Last line `OVERALL: PASS` → Step 5. Any FAIL → treat its evidence as the
+   next iteration's input and return to Step 3. Don't re-grade or argue with
+   the verdict; if a criterion itself seems wrong rather than unmet, surface
+   that to the user instead of dropping it.
 
-> Read the rubric at `<path>/RUBRIC.md`. For each criterion, check the actual
-> artifacts in `<path>` (run commands where the criterion specifies one) and
-> return a verdict: PASS or FAIL per criterion, each with one line of
-> concrete evidence (command output, file content, line numbers). Be
-> skeptical: your job is to find the criterion that does NOT hold. Do not
-> modify any files. End with an overall verdict: PASS only if every
-> criterion passed.
+## Step 5: Report
 
-If the verifier fails a criterion, treat its evidence as the next iteration's
-input and return to Step 3. Don't argue with the verdict or re-grade it
-yourself — if a criterion seems genuinely wrong rather than unmet, surface
-that to the user instead of quietly dropping it.
+The verifier's PASS is final — do not re-run checks or re-inspect files after
+it; write the report and stop.
 
-## Step 5: Stop
-
-- **Success:** the verifier passes every criterion. Report the result with
-  the final verdict and the baseline-to-final improvement. If the work
-  happened in a worktree, hand back the fix only: report the branch name, a
-  summary of the diff, and the exact steps to land the product changes
-  (merge the branch, or `git checkout <branch> -- <files>`). Prescribing
-  those steps is the default; apply the fix yourself only when losing user
-  work is provably impossible — the checkout is clean, or a diff shows the
-  user's uncommitted content is contained in what you apply — and say which
-  of the two you did. Give the user the cleanup commands to run once they
-  have reviewed the log: `git worktree remove --force <path>` (the
-  `--force` is expected — it is what deletes the untracked process
-  artifacts), then delete the branch. Never claim success without giving
-  the user a landing path — the fix already applied, or the branch plus
-  exact landing steps — and never let process artifacts ride along into
-  the user's checkout.
-- **Budget:** if the user gave an iteration or time budget, honor it. If not,
-  and several consecutive iterations (including at least one structural bet)
-  show no progress, stop and report the best result so far, the experiment
-  log, and what you'd try next with more budget. On failure or budget
-  exhaustion, leave the worktree in place — don't delete it — and report
-  its path.
-
-In fallback mode, add one line noting that `.loop/` remains and how to
-remove it.
-
-Never claim success without a passing verifier verdict from this session.
+- **Success** (M1 satisfied): report the verifier's verdict, baseline → final
+  result, and iterations used.
+  - Worktree mode: hand back the fix only — branch name, diff summary, exact
+    landing steps (merge, or `git checkout <branch> -- <files>`). Prescribing
+    is the default; apply it yourself only when losing user work is provably
+    impossible (clean checkout, or the diff contains the user's uncommitted
+    content), and say which you did. Give cleanup commands for after review:
+    `git worktree remove --force <path>` (the `--force` deletes the untracked
+    `.loop/`), then delete the branch.
+  - Fallback mode: note in one line that `<ws>/.loop/` remains (rubric +
+    experiment log) and how to remove it. Do not remove it yourself (N2).
+- **Budget exhausted / stopped:** report best-so-far, the experiment log, and
+  what you'd try next. Leave the workspace in place — worktree included —
+  and report its path.
