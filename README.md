@@ -45,39 +45,47 @@ converge on.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ 0. ISOLATE   Work in a disposable git worktree — or a    │
-│              .loop/ dir when worktrees aren't possible   │
-│              — so the loop never dirties your checkout   │
+│ 0. ISOLATE    Work in a disposable git worktree — or a   │
+│               .loop/ dir when worktrees aren't possible  │
+│               — so the loop never dirties your checkout  │
 ├──────────────────────────────────────────────────────────┤
-│ 1. RUBRIC    Turn the goal into RUBRIC.md: objectively   │
-│              checkable criteria + anti-gaming guards     │
-│              ("tests not modified", "scorer untouched")  │
+│ 1. RUBRIC     Fill the verbatim template: one-line CHECK │
+│               commands (exit 0 = pass) + protected files │
+│               pinned by sha256 before any work starts    │
 ├──────────────────────────────────────────────────────────┤
-│ 2. BASELINE  One honest attempt; record the starting     │
-│              measurement                                 │
+│ 2. BASELINE   One honest attempt; record the starting    │
+│               measurement in EXPERIMENTS.md              │
 ├──────────────────────────────────────────────────────────┤
-│ 3. ITERATE   Change ONE thing → run the cheap checks →   │
-│   ▲          log it in EXPERIMENTS.md (what/why/result/  │
-│   │          keep-or-revert). When tuning plateaus,      │
-│   │          make a structural bet instead               │
+│ 3. ITERATE    Change ONE thing → run the cheap checks →  │
+│   ▲           log it (CHANGE/WHY/RESULT/DECISION). No    │
+│   │           improvement for 3 iterations → make a      │
+│   │           structural bet instead of another tweak    │
 ├───┼──────────────────────────────────────────────────────┤
-│ 4.│VERIFY    Spawn a fresh-context verifier sub-agent    │
-│   │          given ONLY the rubric + artifact paths.     │
-│   └──────    Any FAIL: its evidence feeds the next       │
-│              iteration                                   │
+│ 4.│PREFLIGHT  scripts/preflight.sh must exit 0 (formats  │
+│   │+ VERIFY   parse, guards hold, every CHECK passes) —  │
+│   │           then spawn a fresh-context verifier from   │
+│   └──────     the verbatim prompt template. Any FAIL:    │
+│               its evidence feeds the next iteration      │
 ├──────────────────────────────────────────────────────────┤
-│ 5. STOP      Only on a passing verifier verdict — or on  │
-│              an explicit budget, reporting best-so-far   │
-│              and the experiment log                      │
+│ 5. STOP       Only on the verifier's OVERALL: PASS — or  │
+│               on an explicit budget, reporting           │
+│               best-so-far and the experiment log         │
 └──────────────────────────────────────────────────────────┘
 ```
+
+The mechanical parts are scripts, not prose, so weaker models can't drift on
+them: `scripts/check_guards.sh` compares protected files against the sha256
+anchors recorded in the rubric, and `scripts/preflight.sh` gates the verifier
+behind format and CHECK-command validation. The rubric, experiment-log, and
+verifier-prompt formats are verbatim templates in `references/` (fill
+placeholders only); design rationale lives in `references/rationale.md`.
 
 Every run leaves an audit trail: `RUBRIC.md` (what "done" means, including
 the guards) and `EXPERIMENTS.md` (every attempt and its measured result),
 alongside the verifier's per-criterion verdict — kept out of your checkout,
-in the worktree (committed once per iteration) or in `.loop/`. On success
-the report includes the branch, a diff summary, and how to merge; on
-failure the worktree is left in place for inspection.
+in the worktree's `.loop/` (excluded via `.git/info/exclude`) or the cwd's.
+On success the report includes the branch, a diff summary, and how to merge;
+on failure the worktree is left in place for inspection.
 
 The full instructions live in
 [self-correction-loop/SKILL.md](self-correction-loop/SKILL.md).

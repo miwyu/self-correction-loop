@@ -16,10 +16,17 @@ repeat.
 
 ## Layout
 
-- `self-correction-loop/SKILL.md` — the skill itself; the product of this repo.
-  `jp/self-correction-loop/SKILL.md` is its Japanese mirror: every skill change
-  lands in both files in the same commit, kept in exact structural sync (same
-  heading/bullet skeleton — verify with a structural diff before committing).
+- `self-correction-loop/` — the skill itself; the product of this repo.
+  `SKILL.md` (numbered steps + MUST/NEVER rules + thresholds, ~145 lines),
+  `references/` (verbatim templates: rubric, experiments log, verifier
+  prompt; plus `rationale.md` holding the design "why"), and `scripts/`
+  (`check_guards.sh` — sha256 verification of protected files;
+  `preflight.sh` — format + guards + CHECK-command gate run before the
+  verifier). `jp/self-correction-loop/` is its Japanese mirror: every skill
+  change lands in both trees in the same commit, kept in exact structural
+  sync (same heading/bullet skeleton; scripts code-identical with translated
+  comments; the verifier-prompt body stays English because its verdict
+  format is parsed — verify with a structural diff before committing).
 - `evals/evals.json` — 4 test cases with prompts and assertions; input
   fixtures live in `evals/files/<eval-name>/`. Assertions cover task success,
   anti-gaming guards (fixture files byte-identical, no hardcoded answers,
@@ -85,23 +92,39 @@ rounding test.
   iterations are uninterpretable.
 - Commit straight to `main`.
 
-## Known eval caveats (as of iteration 2)
+## Sonnet optimization round (2026-07, branch tuning/sonnet-robustness)
 
-- Task success is 100% in both configs on all 4 evals; the measured skill
-  value is process artifacts and isolation hygiene (iteration-2 headline:
-  with-skill 100% vs baseline 84%), at ~3.3× wall time and ~1.7× tokens.
-- `hillclimb-slugify` keeps being one-shot by the baseline — too easy to
-  exercise actual hillclimbing.
+The skill was restructured for weaker executors, measured headless with
+`claude -p --model {claude-fable-5,claude-sonnet-5} --effort high`:
+mechanical rules moved into `scripts/`, formats into verbatim `references/`
+templates, guards anchored by sha256 recorded before work starts, a
+preflight gate before the verifier, and a hardened trigger description.
+Headline (4 evals × N=3, all-assertion pass rate): current skill — fable
+100% / sonnet 92.1% (4/12 undertriggered runs, 4 unverified success claims,
+1 deleted `.loop/`); revised — sonnet 100%, unverified-success 0, verifier
+exactly 1/run, fable 100% (no regression). Cost: sonnet wall median 110s →
+160s; the +10% speed target was not met — the added turns are the price of
+the compliance gains. The harness lives in
+`self-correction-loop-workspace/sonnet-opt/` (`bin/run_one.sh` spawns
+per-run isolated `claude -p` sessions **outside this repo** so Step 0
+doesn't worktree the repo itself; `grade_run.py` / `analyze_transcript.py`
+/ `check_r1_r2.py` score assertions, Q2/verifier counts, and template
+compliance). The subagent-based eval protocol above still works for
+fable-side iteration.
+
+## Known eval caveats (as of the sonnet-optimization round)
+
+- Task success is 100% in every measured config; what discriminates is
+  process compliance (artifacts left, triggering, verified-before-claiming).
+- `hillclimb-slugify` and `dirty-state-fix` are one-shottable — which makes
+  them the *undertrigger* probes: a model that skips the skill still solves
+  them but leaves no artifacts and claims success unverified (baseline
+  sonnet did exactly this 4/12 times).
 - `rubric-readme`'s prompt itself demands independent verification, so it
-  measures artifact-leaving, not verification behavior (the iteration-2
-  baseline ran a verifier but left no artifact).
-- `dirty-state-fix` doesn't discriminate with/without either — an inline fix
-  never trips the trap. It exists to catch a future skill revision that
-  worktrees naively from a stale HEAD.
-- The iteration-2 open gap (eval-3 with-skill run merged loop artifacts into
-  the fixture repo's main) is closed as of commit `7a6e7c3`: Step 3.4 keeps
-  RUBRIC/EXPERIMENTS untracked and Step 5 hands back the fix only. Verified
-  by blank-slate executor runs, not yet re-measured by this eval suite.
-  Current top candidate for the next skill iteration: Step 1's guard
-  criteria should name the pre-work reference (commit SHA / checksum /
-  saved copy) that makes "X was not modified" checkable.
+  measures artifact-leaving, not verification behavior.
+- Sonnet triggering stays probabilistic even with the hardened description:
+  12/12 in the final full measurement but 11/12 in an intermediate revision
+  — treat ~1-in-12 undertrigger as residual risk N=3 evals may miss.
+- The former open item (unanchored guard criteria) is closed: Protected
+  files carry sha256 anchors recorded pre-work, checked mechanically by
+  `check_guards.sh` from worker, preflight, and verifier alike.
