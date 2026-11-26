@@ -23,7 +23,9 @@ iterates, a **verifier** judges. You never write the rubric and never declare
 success on your own. The reasoning behind each rule is in
 `references/rationale.md` (read it when curious, not to run the loop).
 
-`<skill_dir>` = the directory containing this SKILL.md.
+`<skill_dir>` = the directory containing this SKILL.md (the skill's base
+directory; if you do not have it, Glob for `**/self-correction-loop/SKILL.md`
+in the project and in `~/.claude/skills` — never search from `/`).
 `GUARD` = `python3 <skill_dir>/scripts/loop_guard.py` (use the absolute path).
 `<ws>` = the workspace root chosen in Step 0.
 `<run>` = this loop's run directory, `<ws>/.loop/<date>-<slug>`; `GUARD init`
@@ -99,9 +101,10 @@ prints it. Its files have fixed names: `STATE.json`, `REQUEST.md`,
 
 ## Step 2: Baseline
 
-Copy `<skill_dir>/references/experiments-template.md` to
-`<run>/EXPERIMENTS.md`. Run `GUARD checks <run>` once before changing
-anything and record its output lines under `## Baseline`. If every CHECK
+Read `<skill_dir>/references/experiments-template.md` and write
+`<run>/EXPERIMENTS.md` from it. Run `GUARD checks <run>` once before changing
+anything and record its output under `## Baseline`. Every field value goes on
+the same line as its label: join several output lines with ` | `. If every CHECK
 already passes, make no change: fill `## Iteration 1` with
 `CHANGE: none (baseline already passes)`, `WHY: nothing to change`,
 `RESULT:` the same output, `DECISION: keep`, and go to Step 4. That block is
@@ -144,7 +147,8 @@ that fix real defects, log them as iterations, then go to Step 5 as
 2. Take the **Verifier** prompt from `role-prompts.md`, replace `{{WS}}`,
    `{{RUN_DIR}}`, `{{GUARD}}` and `{{FREEZE_DIGEST}}` (the digest from Step 1),
    and spawn a fresh sub-agent with that text (M2).
-3. Save its whole reply, unchanged, as `<run>/VERDICT-NN.md` (01, 02, ...).
+3. Save its verdict — every line from `GUARDS:` through `OVERALL:`,
+   unchanged — as `<run>/VERDICT-NN.md` (01, 02, ...).
    A reply without an `OVERALL:` line is not a verdict: save nothing and
    spawn a fresh verifier with the same prompt, at most twice; after that go
    to Step 5 as **stopped**.
