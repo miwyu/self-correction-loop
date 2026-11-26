@@ -413,6 +413,33 @@ class Guard(unittest.TestCase):
                 (self.run_dir / 'FREEZE.json').write_text(json.dumps(data))
                 self.guard('guards', self.run_dir, ok=False)
 
+    def test_literal_angle_brackets_are_not_placeholders(self):
+        (self.ws / 'code.txt').write_text('<PASS> 1 < 2 > 0\n')
+        self.start(check='cat code.txt', expect='EXPECT: <PASS>')
+        log = self.run_dir / 'EXPERIMENTS.md'
+        log.write_text(log.read_text().replace('RESULT: r', 'RESULT: C1: OK - cat code.txt -> <PASS> 1 < 2 > 0'))
+        r = self.guard('preflight', self.run_dir, '--expect', self.digest)
+        self.assertIn('PREFLIGHT: ALL OK', r.stdout)
+
+    def test_every_shipped_template_token_is_rejected(self):
+        refs = GUARD.parent.parent / 'references'
+        for name, target in (('rubric-template.md', 'RUBRIC.md'), ('experiments-template.md', 'EXPERIMENTS.md')):
+            import re
+            body = re.sub(r'<!--.*?-->\n?', '', (refs / name).read_text(), flags=re.S)
+            tokens = set(re.findall(r'<[^<>\n]+>', body))
+            self.assertTrue(tokens, name)
+            for token in tokens:
+                with self.subTest(template=name, token=token):
+                    self.start(freeze=False)
+                    path = self.run_dir / target
+                    if target == 'RUBRIC.md':
+                        path.write_text(path.read_text().replace('code.txt exists and is not empty', token))
+                        self.guard('freeze', self.run_dir, code=2)
+                    else:
+                        self.guard('freeze', self.run_dir)
+                        path.write_text(path.read_text().replace('CHANGE: c', 'CHANGE: ' + token))
+                        self.guard('preflight', self.run_dir, ok=False)
+
     def test_complete_untouched_run_passes_preflight(self):
         self.start()
         r = self.guard('preflight', self.run_dir)
@@ -581,9 +608,9 @@ class Guard(unittest.TestCase):
     def test_rubric_rejects_placeholders_and_comments(self):
         base = RUBRIC.format(check='true', expect='EXPECT: output')
         variants = (base.replace('CHECK: true', 'CHECK: <command>'),
-                    base.replace('code.txt exists and is not empty', '<goal>'),
+                    base.replace('code.txt exists and is not empty', '<one sentence: what the user asked for, with the measurable finish line>'),
                     base.replace('- test.txt', '- <path>'),
-                    base.replace('EXPECT: output', 'EXPECT: <substring>'),
+                    base.replace('EXPECT: output', 'EXPECT: <substring that must appear in the output; delete this line if the exit code decides>'),
                     base.replace('MANUAL: Is code.txt readable?', 'MANUAL: <yes/no question>'),
                     base + '<!-- template -->\n')
         for text in variants:

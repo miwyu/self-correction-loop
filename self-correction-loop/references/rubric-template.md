@@ -26,7 +26,8 @@
        CHECK: python3 score.py
        EXPECT: SCORE: 20/20
        CHECK: python3 -c "from foo import f; assert f(3) == 9"
-     Copy the user's stated command verbatim into a CHECK where one exists.
+     Copy the user's stated command verbatim into a CHECK when it is a plain
+     command (no pipe, redirect or `NAME=value` prefix).
      MANUAL: only for criteria no command can decide; phrase it as a yes/no
      question a fresh reader can answer from the artifacts alone. -->
 ### C1: <short name>

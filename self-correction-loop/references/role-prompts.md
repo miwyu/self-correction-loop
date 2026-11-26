@@ -19,12 +19,15 @@ The user's request, verbatim: {{RUN_DIR}}/REQUEST.md
 2. Read {{TEMPLATE}} and write {{RUN_DIR}}/RUBRIC.md from it.
    - Protected files: every test, scorer, fixture or rubric the request forbids
      changing or that defines success. When in doubt, protect it. Only regular
-     files inside the workspace can be listed; if one that matters is outside
-     it or is a symlink, leave it out and say so in your reply.
+     files inside the workspace can be listed; if a file the request forbids
+     changing is outside it or is a symlink, do not freeze: reply with that
+     as the reason and stop.
    - Criteria: the user's stated command, word for word, as a CHECK. CHECKs run
-     without a shell: if the user's command needs a pipe, a redirect or an
-     environment variable, write a CHECK that runs the same program and put the
-     required output in EXPECT. A success marker the user named (such as
+     without a shell. If the user's command only pipes its output into a
+     filter, run the program itself and put the required output in EXPECT. If
+     it sets an environment variable, write `env NAME=value program ...`. For
+     anything else a shell would do, write one `python3 -c "..."` line that
+     runs it the same way. A success marker the user named (such as
      "SCORE: 20/20") belongs in EXPECT. When the task could be met by
      special-casing the visible inputs, add one CHECK on an input the visible
      tests do not use. MANUAL only when no command can decide. Do not copy

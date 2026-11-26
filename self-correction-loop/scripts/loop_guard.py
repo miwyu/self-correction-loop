@@ -164,6 +164,30 @@ def cmd_init(ws, slug, request_file):
     return 0
 
 
+_TOKENS = None
+
+
+def has_placeholder(value):
+    """True if value still holds a placeholder token of the shipped templates.
+
+    Only the templates' own tokens count, so literal text such as '<PASS>' or
+    'a < b > c' in a command or an output line is not mistaken for one.
+    """
+    global _TOKENS
+    if _TOKENS is None:
+        refs = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "references")
+        found = set()
+        for name in ("rubric-template.md", "experiments-template.md"):
+            try:
+                with open(os.path.join(refs, name), encoding="utf-8") as f:
+                    body = re.sub(r"<!--.*?-->", "", f.read(), flags=re.S)
+            except (OSError, UnicodeDecodeError):
+                continue
+            found.update(re.findall(r"<[^<>\n]+>", body))
+        _TOKENS = found
+    return any(token in value for token in _TOKENS)
+
+
 def parse_rubric(text):
     """Return (sections, protected_paths, criteria). criteria: list of dicts."""
     if "<!--" in text:
@@ -181,14 +205,14 @@ def parse_rubric(text):
             cur = None
             continue
         if sec == "Goal":
-            if re.search(r'<[^>]*>', line):
+            if has_placeholder(line):
                 raise ValueError("RUBRIC.md: placeholder in Goal")
             goal.append(line)
         if sec == "Protected files" and line.startswith("- "):
             p = line[2:].strip()
             if not p:
                 raise ValueError("RUBRIC.md: empty protected path")
-            if re.search(r'<[^>]*>', p):
+            if has_placeholder(p):
                 raise ValueError("RUBRIC.md: placeholder in protected path")
             if p == "(none)":
                 no_protected = True
@@ -206,7 +230,7 @@ def parse_rubric(text):
                     raise ValueError("RUBRIC.md: field without a criterion")
                 field, value = line.split(":", 1)
                 value = value.strip()
-                if re.search(r'<[^>]*>', value):
+                if has_placeholder(value):
                     raise ValueError("RUBRIC.md: placeholder in " + cur["id"] + " " + field)
                 if field in ("CHECK", "MANUAL") and not value:
                     raise ValueError("RUBRIC.md: empty " + field + " in " + cur["id"])
@@ -410,7 +434,7 @@ def preflight(loop_dir, expect=None):
         if '<!--' in line:
             ok = say('PREFLIGHT', False, f'{block_name}: HTML comment in EXPERIMENTS.md') and ok
         field = re.match(r'^(COMMAND|RESULT|CHANGE|WHY|DECISION):(.*)$', line)
-        if field and re.search(r'<[^>]*>', field.group(2)):
+        if field and has_placeholder(field.group(2)):
             ok = say('PREFLIGHT', False, f'{block_name}: placeholder in {field.group(1)}') and ok
     blocks = re.split(r'^## ', exp, flags=re.M)[1:]
     baselines = [b for b in blocks if b.startswith('Baseline')]

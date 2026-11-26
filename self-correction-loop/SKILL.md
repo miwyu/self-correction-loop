@@ -35,8 +35,8 @@ prints it. Its files have fixed names: `STATE.json`, `REQUEST.md`,
 - **MUST M1:** claim success only after, in this session and in this order:
   `GUARD preflight <run>` exited 0, **then** a verifier sub-agent's reply ended
   `OVERALL: PASS`, **then** `GUARD finish <run> pass --expect <digest>`
-  exited 0. An edit to the deliverable after a verdict voids that verdict:
-  go back to Step 4.
+  exited 0. An edit to the deliverable after a verdict voids that verdict
+  (and lifts N6): go back to Step 4.
 - **MUST M2:** pass the two prompts in `<skill_dir>/references/role-prompts.md`
   verbatim; replace only the `{{...}}` placeholders. Never add your summary,
   diff, or reasoning.
@@ -50,12 +50,14 @@ prints it. Its files have fixed names: `STATE.json`, `REQUEST.md`,
   the solution, and never make the solution detect that it is under test.
 - **NEVER N4:** write helper or checker files. Besides the task's own
   deliverables, the only files you create are `<ws>/.loop/request.txt` and
-  the `<run>` files listed above.
+  the `<run>` files listed above. Caches that the check commands create by
+  themselves are fine.
 - **NEVER N5:** `git init` a repo the user didn't ask for, or commit to the
   user's branch.
 - **NEVER N6:** once you have saved a verdict ending `OVERALL: PASS`, run
   nothing except `GUARD finish` and the read-only git commands the Step 5
-  report needs. (`finish` re-runs the checks itself.)
+  report needs. (`finish` re-runs the checks itself; if it refuses, see
+  Step 5.)
 
 ## Step 0: Choose the workspace
 
@@ -101,7 +103,9 @@ Copy `<skill_dir>/references/experiments-template.md` to
 `<run>/EXPERIMENTS.md`. Run `GUARD checks <run>` once before changing
 anything and record its output lines under `## Baseline`. If every CHECK
 already passes, make no change: fill `## Iteration 1` with
-`CHANGE: none (baseline already passes)` and go to Step 4.
+`CHANGE: none (baseline already passes)`, `WHY: nothing to change`,
+`RESULT:` the same output, `DECISION: keep`, and go to Step 4. That block is
+Iteration 1; any later change is Iteration 2.
 
 ## Step 3: Iterate
 
@@ -112,7 +116,8 @@ Per iteration:
 2. Run `GUARD checks <run>` (cheap, no sub-agent).
 3. Log it in EXPERIMENTS.md (CHANGE / WHY / RESULT / DECISION): fill the
    template's `## Iteration 1` block for the first iteration, then append
-   `## Iteration 2`, `## Iteration 3`, ... Leave no `<placeholder>` text.
+   `## Iteration 2`, `## Iteration 3`, ... Leave no template placeholder or
+   comment; DECISION is exactly `keep` or `revert`.
 4. In a worktree: commit the iteration — only files the task is supposed to
    change (`.loop/` is excluded and stays untracked).
 
@@ -131,8 +136,9 @@ that fix real defects, log them as iterations, then go to Step 5 as
 
 ## Step 4: Preflight, then verify
 
-1. Run `GUARD preflight <run>`. Exit 0 required. A failing CHECK or a log
-   format error is yours to fix: return to Step 3. A failure about RUBRIC.md,
+1. Run `GUARD preflight <run>`. Exit 0 required. A failing CHECK is yours to
+   fix: return to Step 3. A log format error is too: correct those lines of
+   EXPERIMENTS.md, keeping what they record. A failure about RUBRIC.md,
    REQUEST.md, FREEZE.json or a protected file is not: go to Step 5 as
    **stopped**. Do not spawn a verifier while preflight fails.
 2. Take the **Verifier** prompt from `role-prompts.md`, replace `{{WS}}`,
@@ -160,6 +166,10 @@ Run exactly one of:
   impossible criterion, or a question for the user.
 - `GUARD finish <run> failed "<one-line reason>"` — the work cannot meet the
   criteria.
+
+If `finish pass` refuses, the saved PASS no longer stands and N6 is lifted.
+Read what failed: a CHECK or the log → fix it and repeat Step 4 for a new
+verdict; a frozen file → `finish <run> stopped` with that reason.
 
 Then report, and stop:
 

@@ -1,6 +1,7 @@
 <!-- TEMPLATE. Copy this file to <run_dir>/EXPERIMENTS.md, then replace
-     only the <angle-bracket placeholders>. Append one "## Iteration N" block
-     per iteration — never rewrite or delete earlier blocks. Keep the field
+     only the <angle-bracket placeholders>. Fill the "## Iteration 1" block for
+     the first iteration, then append "## Iteration 2", "## Iteration 3", ...
+     Never delete earlier blocks or change what they record. Keep the field
      names exactly as written (CHANGE:/WHY:/RESULT:/DECISION:) —
      loop_guard.py preflight checks them. Delete every comment like this one
      from the copy. -->
