@@ -1,13 +1,15 @@
-<!-- TEMPLATE. Copy this file to <workspace>/.loop/EXPERIMENTS.md, then replace
-     only the <angle-bracket placeholders>. Append one "## Iteration N" block
-     per iteration — never rewrite or delete earlier blocks. Keep the field
+<!-- TEMPLATE. Copy this file to <run_dir>/EXPERIMENTS.md, then replace
+     only the <angle-bracket placeholders>. Fill the "## Iteration 1" block for
+     the first iteration, then append "## Iteration 2", "## Iteration 3", ...
+     Never delete earlier blocks or change what they record. Each value goes on
+     the same line as its label; join several output lines with " | ". Keep the field
      names exactly as written (CHANGE:/WHY:/RESULT:/DECISION:) —
-     scripts/preflight.sh checks them. Delete every comment like this one
+     loop_guard.py preflight checks them. Delete every comment like this one
      from the copy. -->
 # EXPERIMENTS
 
 ## Baseline
-COMMAND: <the core CHECK command from RUBRIC.md>
+COMMAND: <the command you ran: loop_guard.py checks>
 RESULT: <its verbatim output line(s) before any change was made>
 
 ## Iteration 1

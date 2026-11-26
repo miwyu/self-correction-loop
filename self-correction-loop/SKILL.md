@@ -17,43 +17,61 @@ description: >
 # Self-Correction Loop
 
 Loop: attempt → measure → improve, stopping only when an independent verifier
-confirms every criterion. The procedure is below; the reasoning behind each
-rule is in `references/rationale.md` (read it when curious, not to run the loop).
+confirms every criterion. Three roles in three separate contexts: a **rubric
+author** decides what "done" means and freezes it, the **worker** (you)
+iterates, a **verifier** judges. You never write the rubric and never declare
+success on your own. The reasoning behind each rule is in
+`references/rationale.md` (read it when curious, not to run the loop).
 
-`<skill_dir>` = the directory containing this SKILL.md.
-`<ws>` = the workspace root chosen in Step 0. `<ws>/.loop/` holds all loop
-artifacts. Run every CHECK command from `<ws>`.
+`<skill_dir>` = the directory containing this SKILL.md (the skill's base
+directory; if you do not have it, Glob for `**/self-correction-loop/SKILL.md`
+in the project and in `~/.claude/skills` — never search from `/`).
+`GUARD` = `python3 <skill_dir>/scripts/loop_guard.py` (use the absolute path).
+`<ws>` = the workspace root chosen in Step 0.
+`<run>` = this loop's run directory, `<ws>/.loop/<date>-<slug>`; `GUARD init`
+prints it. Its files have fixed names: `STATE.json`, `REQUEST.md`,
+`RUBRIC.md`, `FREEZE.json`, `EXPERIMENTS.md`, `VERDICT-01.md`, `VERDICT-02.md`, ...
 
 ## MUST / NEVER
 
-- **MUST M1:** claim success only after, in this session, `preflight.sh`
-  exited 0 **and then** a verifier sub-agent's report ended `OVERALL: PASS`
-  — in that order, both against the current state of the artifacts.
-- **MUST M2:** copy the three templates in `<skill_dir>/references/`
-  verbatim; replace only their placeholders.
+- **MUST M1:** claim success only after, in this session and in this order:
+  `GUARD preflight <run>` exited 0, **then** a verifier sub-agent's reply ended
+  `OVERALL: PASS`, **then** `GUARD finish <run> pass --expect <digest>`
+  exited 0. An edit to the deliverable after a verdict voids that verdict
+  (and lifts N6): go back to Step 4.
+- **MUST M2:** pass the two prompts in `<skill_dir>/references/role-prompts.md`
+  verbatim; replace only the `{{...}}` placeholders. Never add your summary,
+  diff, or reasoning.
 - **MUST M3:** change one thing per iteration, and log every iteration in
   `EXPERIMENTS.md` before moving on.
-- **NEVER N1:** modify a file listed under `## Protected files` in RUBRIC.md.
-- **NEVER N2:** delete or "clean up" `.loop/`, RUBRIC.md, or EXPERIMENTS.md —
-  they are the user's audit trail; the user removes them after review.
+- **NEVER N1:** modify `RUBRIC.md`, `REQUEST.md`, `FREEZE.json`, a
+  `VERDICT-NN.md` you saved, or any file listed under `## Protected files`.
+- **NEVER N2:** delete, rename or "clean up" anything under `.loop/` — it is
+  the user's audit trail; the user removes it after review.
 - **NEVER N3:** copy expected outputs, test cases, or scorer internals into
-  RUBRIC.md or into the solution.
-- **NEVER N4:** paraphrase, extend, or summarize-into the verifier prompt.
+  the solution, and never make the solution detect that it is under test.
+- **NEVER N4:** write helper or checker files. Besides the task's own
+  deliverables, the only files you create are `<ws>/.loop/request.txt` and
+  the `<run>` files listed above. Caches that the check commands create by
+  themselves are fine.
 - **NEVER N5:** `git init` a repo the user didn't ask for, or commit to the
   user's branch.
-- **NEVER N6:** re-run rubric checks or re-inspect artifacts after the
-  verifier returns `OVERALL: PASS` — the verdict is final and already in your
-  context. The only tool use allowed after PASS is the git commands Step 5's
-  hand-back itself needs (diff summary, status check), nothing else.
+- **NEVER N6:** once you have saved a verdict ending `OVERALL: PASS`, run
+  nothing except `GUARD finish` and the read-only git commands the Step 5
+  report needs. (`finish` re-runs the checks itself; if it refuses, see
+  Step 5.)
 
 ## Step 0: Choose the workspace
 
 1. If the cwd is **not** a git repository (or worktree isolation is
    impossible/too heavy — e.g. heavy env setup a fresh checkout can't rerun):
    `<ws>` = cwd. Skip to Step 1.
-2. If the cwd **is** a git repository: work in a disposable worktree — via
-   EnterWorktree in Claude Code, else `git worktree add ../<repo>-loop -b <branch>`
-   (sibling of the repo). `<ws>` = the worktree.
+2. If the cwd **is** a git repository — judged after any setup command the
+   user told you to run first: work in a disposable worktree — via
+   EnterWorktree in Claude Code (this step is the explicit instruction that
+   tool asks for); if it is unavailable or fails,
+   `git worktree add ../<repo>-loop -b <branch>` (sibling of the repo).
+   `<ws>` = the worktree.
    - **Dirty-state guard:** worktrees start from the committed state. Run
      `git status` first; copy any uncommitted files the task touches into the
      worktree (prefer copying over a WIP commit — it leaves the user's branch
@@ -64,42 +82,47 @@ artifacts. Run every CHECK command from `<ws>`.
      user's description (a test that "should fail" passes), suspect a stale
      base: inspect the original checkout's uncommitted changes.
 
-## Step 1: Set up the loop workspace (before any work on the task)
+## Step 1: Start the run and get the rubric frozen (before any work on the task)
 
-1. One command block (if `.loop/` already exists, stop and report instead;
-   skip the exclude line outside a git repo):
-   ```bash
-   test ! -e <ws>/.loop && mkdir -p <ws>/.loop \
-     && cp -R <skill_dir>/scripts <ws>/.loop/scripts \
-     && echo '.loop/' >> "$(git -C <ws> rev-parse --path-format=absolute --git-common-dir)/info/exclude" \
-     ; shasum -a 256 <ws>/<each protected file>
-   ```
-2. Read `<skill_dir>/references/rubric-template.md` and
-   `<skill_dir>/references/experiments-template.md` (both, now); create
-   `<ws>/.loop/RUBRIC.md` and `<ws>/.loop/EXPERIMENTS.md` from them.
-   Criteria must be objectively checkable; put the user's stated command
-   verbatim in a CHECK line. Add guard criteria for the ways the goal could
-   be gamed (test edits, scorer edits, hardcoded outputs): list each such
-   file under `## Protected files` with the sha256 recorded in step 1 —
-   **before any work**. Keep every CHECK a one-line command (pipe to
-   `grep -q`/`diff` as needed); if a check can't be one line, make it a
-   MANUAL criterion instead — do not write helper checker files. The loop's
-   only files are RUBRIC.md, EXPERIMENTS.md, and the copied `scripts/`.
+1. Write the user's request, word for word, to `<ws>/.loop/request.txt`
+   (create the `.loop` directory if it is missing).
+2. Run `GUARD init <ws> <slug> --request-file <ws>/.loop/request.txt`
+   (`<slug>`: lowercase words joined by `-`, at most 30 characters, e.g.
+   `cart-rounding`). The first line it prints is `<run>`.
+3. Read `<skill_dir>/references/role-prompts.md`. Take the **Rubric author**
+   prompt, replace `{{WS}}`, `{{RUN_DIR}}`, `{{TEMPLATE}}` (absolute path of
+   `<skill_dir>/references/rubric-template.md`) and `{{GUARD}}` (absolute path
+   of `loop_guard.py`), and spawn a sub-agent (Agent tool) with that text.
+   Do no work on the task until it replies.
+4. If its reply has no `FREEZE: OK` line, fix nothing yourself: run
+   `GUARD finish <run> stopped "rubric not frozen"` and report the author's
+   error to the user.
+5. Otherwise note the `digest=` value on the `FREEZE: OK` line; Steps 4 and 5
+   need it. Run `GUARD guards <run> --expect <digest>`; exit 0 is required.
+   Tell the user the digest and every `GUARDS: NOTE` line in one short message.
 
 ## Step 2: Baseline
 
-Run the core CHECK command once before changing anything; record the verbatim
-result under `## Baseline` in EXPERIMENTS.md. The baseline is what later
-results are compared against, and what you reconcile in Step 0's guard.
+Read `<skill_dir>/references/experiments-template.md` and write
+`<run>/EXPERIMENTS.md` from it. Run `GUARD checks <run>` once before changing
+anything and record its output under `## Baseline`. Every field value goes on
+the same line as its label: join several output lines with ` | `. If every CHECK
+already passes, make no change: fill `## Iteration 1` with
+`CHANGE: none (baseline already passes)`, `WHY: nothing to change`,
+`RESULT:` the same output, `DECISION: keep`, and go to Step 4. That block is
+Iteration 1; any later change is Iteration 2.
 
 ## Step 3: Iterate
 
 Per iteration:
 
-1. Change **one** thing (M3) — the change you expect to help most.
-2. Run the relevant CHECK commands yourself (cheap, no sub-agent).
-3. Append an `## Iteration N` block to EXPERIMENTS.md
-   (CHANGE / WHY / RESULT / DECISION — the template fixes the fields).
+1. Change **one** thing (M3) — the change you expect to help most. One thing
+   = one cause: one bug, one parameter, one algorithm swap.
+2. Run `GUARD checks <run>` (cheap, no sub-agent).
+3. Log it in EXPERIMENTS.md (CHANGE / WHY / RESULT / DECISION): fill the
+   template's `## Iteration 1` block for the first iteration, then append
+   `## Iteration 2`, `## Iteration 3`, ... Leave no template placeholder or
+   comment; DECISION is exactly `keep` or `revert`.
 4. In a worktree: commit the iteration — only files the task is supposed to
    change (`.loop/` is excluded and stays untracked).
 
@@ -110,36 +133,64 @@ any user-given iteration/time budget; with none, stop and report after 3
 consecutive non-improving iterations that already include a structural
 change.
 
+**Impossible criterion:** if you can show that no deliverable can satisfy the
+frozen criteria (two checks, or two tests inside one CHECK, demand opposite
+results; a CHECK cannot run), do not wait for the plateau rule and do not
+touch the rubric. Keep every change that makes more checks or tests pass
+without breaking one that passed, and log each as an iteration. When no
+further change can do that, go to Step 5 as **stopped** and ask the user
+which criterion is right.
+
 ## Step 4: Preflight, then verify
 
-1. Run `bash <ws>/.loop/scripts/preflight.sh <ws>/.loop`.
-   Exit 0 required; on failure, fix and return to Step 3. Do not spawn a
-   verifier while preflight fails.
-2. Read `<skill_dir>/references/verifier-prompt.md`. Replace `{{LOOP_DIR}}`
-   with the absolute path of `<ws>/.loop` — the only edit allowed (N4) — and
-   spawn a verifier sub-agent (Agent tool) with that text. Never include your
-   summary, diff, or reasoning.
-3. Last line `OVERALL: PASS` → Step 5. Any FAIL → treat its evidence as the
-   next iteration's input and return to Step 3. Don't re-grade or argue with
-   the verdict; if a criterion itself seems wrong rather than unmet, surface
-   that to the user instead of dropping it.
+1. Run `GUARD preflight <run>`. Exit 0 required. A failing CHECK is yours to
+   fix: return to Step 3. A log format error is too: correct those lines of
+   EXPERIMENTS.md, keeping what they record. A failure about RUBRIC.md,
+   REQUEST.md, FREEZE.json or a protected file is not: go to Step 5 as
+   **stopped**. Do not spawn a verifier while preflight fails.
+2. Take the **Verifier** prompt from `role-prompts.md`, replace `{{WS}}`,
+   `{{RUN_DIR}}`, `{{GUARD}}` and `{{FREEZE_DIGEST}}` (the digest from Step 1),
+   and spawn a fresh sub-agent with that text (M2).
+3. Save its verdict — every line from `GUARDS:` through `OVERALL:`,
+   unchanged — as `<run>/VERDICT-NN.md` (01, 02, ...).
+   A reply without an `OVERALL:` line is not a verdict: save nothing and
+   spawn a fresh verifier with the same prompt, at most twice; after that go
+   to Step 5 as **stopped**.
+4. Last line `OVERALL: PASS` → Step 5. Any FAIL → its evidence is the next
+   iteration's input; return to Step 3. Don't re-grade or argue with the
+   verdict. If a FAIL says the rubric itself is wrong (`rubric gap`, a
+   criterion that cannot hold), do not iterate: go to Step 5 as **stopped**
+   and ask the user. A changed rubric needs a new run (Step 1) with the
+   user's answer added to the request; the old run stays as it is.
 
-## Step 5: Report
+## Step 5: Finish and report
 
-The verifier's PASS is final — do not re-run checks or re-inspect files after
-it; write the report and stop.
+Run exactly one of:
 
-- **Success** (M1 satisfied): report the verifier's verdict, baseline → final
-  result, and iterations used.
+- `GUARD finish <run> pass --expect <digest>` — only after `OVERALL: PASS`.
+  It re-runs preflight against the Step 1 digest and refuses unless that
+  passes and the newest `VERDICT-NN.md` ends with `OVERALL: PASS`.
+- `GUARD finish <run> stopped "<one-line reason>"` — budget exhausted,
+  impossible criterion, or a question for the user.
+- `GUARD finish <run> failed "<one-line reason>"` — the work cannot meet the
+  criteria.
+
+If `finish pass` refuses, the saved PASS no longer stands and N6 is lifted.
+Read what failed: a CHECK or the log → fix it and repeat Step 4 for a new
+verdict; a frozen file → `finish <run> stopped` with that reason.
+
+Then report, and stop:
+
+- **Success** (M1 satisfied): the verdict lines, baseline → final result,
+  iterations used, the freeze digest, any `GUARDS: NOTE` lines, and `<run>`.
   - Worktree mode: hand back the fix only — branch name, diff summary, exact
-    landing steps (merge, or `git checkout <branch> -- <files>`). Prescribing
-    is the default; apply it yourself only when losing user work is provably
-    impossible (clean checkout, or the diff contains the user's uncommitted
-    content), and say which you did. Give cleanup commands for after review:
+    landing steps (merge, or `git checkout <branch> -- <files>`). Prescribe
+    them; do not land the fix yourself. Give cleanup commands for after review:
     `git worktree remove --force <path>` (the `--force` deletes the untracked
     `.loop/`), then delete the branch.
-  - Fallback mode: note in one line that `<ws>/.loop/` remains (rubric +
-    experiment log) and how to remove it. Do not remove it yourself (N2).
-- **Budget exhausted / stopped:** report best-so-far, the experiment log, and
-  what you'd try next. Leave the workspace in place — worktree included —
-  and report its path.
+  - Fallback mode: note in one line that `<ws>/.loop/` remains and how to
+    remove it. Do not remove it yourself (N2).
+- **Stopped / failed:** say first that the goal was not reached. Then
+  best-so-far, what is in the experiment log, the open question or what you'd
+  try next. Leave the workspace in place — worktree included — and report
+  its path.

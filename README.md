@@ -22,7 +22,9 @@ Two observations about working with current models motivate the design:
 
 The skill packages both ideas into a repeatable procedure, plus guard rails
 against the failure mode that loops invite: gaming the metric (weakening
-tests, editing the scorer, hardcoding expected outputs). Work also stays out
+tests, editing the scorer, hardcoding expected outputs). The worker never
+writes its own finish line: a separate rubric author does, and the result is
+frozen before work starts. Work also stays out
 of your checkout: the loop runs in a disposable git worktree (with a
 dirty-state guard for uncommitted changes), falling back to a `.loop/`
 directory where worktrees aren't possible.
@@ -37,8 +39,8 @@ be solved in one attempt:
 - "Iterate on this document until it satisfies the rubric."
 
 It is _not_ useful for one-shot tasks or tasks with no checkable goal — the
-loop's overhead (roughly 2–4× wall time in our benchmarks, mostly the
-verifier sub-agent) only pays off when there is something objective to
+loop's overhead (two extra sub-agents: about 3–5 minutes on tasks a bare
+model finishes in 1–2) only pays off when there is something objective to
 converge on.
 
 ## How the loop works
@@ -49,9 +51,9 @@ converge on.
 │               .loop/ dir when worktrees aren't possible  │
 │               — so the loop never dirties your checkout  │
 ├──────────────────────────────────────────────────────────┤
-│ 1. RUBRIC     Fill the verbatim template: one-line CHECK │
-│               commands (exit 0 = pass) + protected files │
-│               pinned by sha256 before any work starts    │
+│ 1. RUBRIC     A separate rubric-author sub-agent writes  │
+│               the CHECK commands and protected files,    │
+│               then freezes them. The worker never edits  │
 ├──────────────────────────────────────────────────────────┤
 │ 2. BASELINE   One honest attempt; record the starting    │
 │               measurement in EXPERIMENTS.md              │
@@ -61,29 +63,43 @@ converge on.
 │   │           improvement for 3 iterations → make a      │
 │   │           structural bet instead of another tweak    │
 ├───┼──────────────────────────────────────────────────────┤
-│ 4.│PREFLIGHT  scripts/preflight.sh must exit 0 (formats  │
-│   │+ VERIFY   parse, guards hold, every CHECK passes) —  │
+│ 4.│PREFLIGHT  loop_guard.py preflight must exit 0 (logs  │
+│   │+ VERIFY   parse, freeze intact, every CHECK passes)  │
 │   │           then spawn a fresh-context verifier from   │
 │   └──────     the verbatim prompt template. Any FAIL:    │
 │               its evidence feeds the next iteration      │
 ├──────────────────────────────────────────────────────────┤
-│ 5. STOP       Only on the verifier's OVERALL: PASS — or  │
-│               on an explicit budget, reporting           │
-│               best-so-far and the experiment log         │
+│ 5. STOP       loop_guard.py finish closes the run: pass  │
+│               only with a saved PASS verdict and intact  │
+│               freeze; otherwise stopped, with the log    │
 └──────────────────────────────────────────────────────────┘
 ```
 
-The mechanical parts are scripts, not prose, so weaker models can't drift on
-them: `scripts/check_guards.sh` compares protected files against the sha256
-anchors recorded in the rubric, and `scripts/preflight.sh` gates the verifier
-behind format and CHECK-command validation. The rubric, experiment-log, and
-verifier-prompt formats are verbatim templates in `references/` (fill
-placeholders only); design rationale lives in `references/rationale.md`.
+The mechanical parts are one script, not prose: `scripts/loop_guard.py`
+(Python 3 standard library only) freezes the rubric, request and protected
+files, runs the CHECK commands, gates the verifier, and refuses to close a
+run as passed unless the freeze is intact, every CHECK passes and a PASS
+verdict is on file. It is run from the skill directory, never copied into
+the workspace, so the worker cannot swap it.
 
-Every run leaves an audit trail: `RUBRIC.md` (what "done" means, including
-the guards) and `EXPERIMENTS.md` (every attempt and its measured result),
-alongside the verifier's per-criterion verdict — kept out of your checkout,
-in the worktree's `.loop/` (excluded via `.git/info/exclude`) or the cwd's.
+The freeze is tied to two things the worker's run records cannot rewrite:
+the committed git blob of each protected file, and a freeze digest that the
+rubric author returns and the verifier and `finish` must be given. What this
+does not stop: a worker that passes a made-up digest to the verifier, edits
+made before the freeze outside git (these are disclosed as `unanchored`, not
+blocked), and a hand-written verdict file — `finish` checks a verdict's
+form, not who wrote it. Design rationale lives in `references/rationale.md`.
+
+The rubric, experiment-log and role-prompt formats are verbatim templates in
+`references/` (fill placeholders only).
+
+Every run leaves an audit trail in its own directory,
+`.loop/<date>-<slug>/`: `REQUEST.md`, `RUBRIC.md` (what "done" means),
+`FREEZE.json`, `EXPERIMENTS.md` (every attempt and its measured result),
+each verifier verdict as `VERDICT-NN.md`, and `STATE.json` — kept out of
+your checkout, in the worktree's `.loop/` (excluded via
+`.git/info/exclude`) or the cwd's. A second loop in the same place gets a
+new run directory.
 On success the report includes the branch, a diff summary, and how to merge;
 on failure the worktree is left in place for inspection.
 
@@ -97,6 +113,8 @@ skill-creator eval loop (run test prompts with and without the skill, grade
 against assertions, review, revise):
 
 - `self-correction-loop/` — the skill itself
+- `tests/` — unit tests for `loop_guard.py`
+  (`python3 -m unittest discover -s tests`)
 - `evals/` — test cases and fixtures used to benchmark it
 - `self-correction-loop-workspace/` (gitignored) — generated run results
 
