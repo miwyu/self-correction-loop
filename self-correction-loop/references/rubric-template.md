@@ -1,35 +1,37 @@
-<!-- TEMPLATE. Copy this file to <workspace>/.loop/RUBRIC.md, then replace only
-     the <angle-bracket placeholders> and add/remove criterion blocks. Do not
-     rename the section headings, and do not change the "CHECK: " / "MANUAL: " /
-     "- <path> sha256=" line formats — scripts/preflight.sh and the verifier
-     parse them. Delete every comment like this one from the copy. -->
+<!-- TEMPLATE. Write <run_dir>/RUBRIC.md from this file: replace only the
+     <angle-bracket placeholders> and add/remove criterion blocks. Keep the
+     section headings and the "- <path>", "### C<n>:", "CHECK: ", "EXPECT: ",
+     "MANUAL: " line formats — loop_guard.py parses them. Delete every comment
+     like this one from the copy. -->
 # RUBRIC
 
 ## Goal
 <one sentence: what the user asked for, with the measurable finish line>
 
 ## Protected files
-<!-- Every file the goal forbids changing (test files, scorer scripts, fixture
-     data). One line per file, path relative to the workspace root, hash from:
-       shasum -a 256 <file>   (or sha256sum <file>)
-     recorded BEFORE any work starts. If the goal protects nothing, write
-     exactly one line: "- (none)".
-     NEVER copy expected outputs, test cases, or scorer internals from these
-     files into this rubric — record only paths and hashes. -->
-- <path> sha256=<64-hex-digest>
+<!-- Every file the goal forbids changing or that defines success (test files,
+     scorer scripts, fixture data, the user's own rubric). One line per file,
+     path relative to the workspace root, no hash — `loop_guard.py freeze`
+     records the hashes. If the goal protects nothing, write exactly one line:
+     "- (none)". NEVER copy expected outputs, test cases, or scorer internals
+     from these files into this rubric. -->
+- <path>
 
 ## Criteria
 <!-- One "### C<n>:" block per criterion, numbered C1, C2, ...
-     CHECK: one shell command, run from the workspace root, that exits 0 if and
-     only if the criterion holds. If the signal is in the output rather than
-     the exit code, make it the exit code, e.g.:
-       CHECK: python3 score.py | grep -q 'SCORE: 20/20'
+     CHECK: one command, run from the workspace root WITHOUT a shell: pipes,
+     redirects, globs, `&&`, `||` and $VARS are not interpreted. It passes
+     when it exits 0 and every EXPECT substring appears in its output.
        CHECK: python3 -m pytest test_foo.py -q
-     Copy the user's stated command verbatim into the CHECK where one exists.
+       CHECK: python3 score.py
+       EXPECT: SCORE: 20/20
+       CHECK: python3 -c "from foo import f; assert f(3) == 9"
+     Copy the user's stated command verbatim into a CHECK where one exists.
      MANUAL: only for criteria no command can decide; phrase it as a yes/no
      question a fresh reader can answer from the artifacts alone. -->
 ### C1: <short name>
 CHECK: <command>
+EXPECT: <substring that must appear in the output; delete this line if the exit code decides>
 
 ### C2: <short name>
 MANUAL: <yes/no question>
