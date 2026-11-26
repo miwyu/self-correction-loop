@@ -469,6 +469,230 @@ class Guard(unittest.TestCase):
         r = self.guard('finish', self.run_dir, 'invalid', code=2)
         self.assertIn('pass --expect', r.stdout)
 
+    def test_autocrlf_anchor_compares_raw_bytes(self):
+        git(self.ws, 'init', '-q')
+        git(self.ws, 'config', 'core.autocrlf', 'true')
+        self.commit()
+        self.start()
+        self.assertEqual(self.frozen()['anchors']['test.txt']['anchor'], 'git')
+        self.guard('guards', self.run_dir)
+        (self.ws / 'test.txt').write_bytes(b'strict\r\n')
+        self.rewrite_freeze_for_gamed_guard()
+        r = self.guard('guards', self.run_dir, ok=False)
+        self.assertIn('git anchor', r.stdout)
+
+    def test_finish_pass_rechecks_full_preflight(self):
+        for failure, message in (('missing log', 'EXPERIMENTS.md'), ('check', 'C1: FAIL')):
+            with self.subTest(failure=failure):
+                self.start()
+                (self.run_dir / 'VERDICT-01.md').write_text(VERDICT)
+                state = (self.run_dir / 'STATE.json').read_bytes()
+                if failure == 'missing log':
+                    (self.run_dir / 'EXPERIMENTS.md').unlink()
+                else:
+                    (self.ws / 'code.txt').write_text('')
+                r = self.guard('finish', self.run_dir, 'pass', '--expect', self.digest, ok=False)
+                self.assertIn(message, r.stdout)
+                self.assertIn('preflight', r.stdout)
+                self.assertEqual((self.run_dir / 'STATE.json').read_bytes(), state)
+
+    def test_preflight_accepts_expected_digest(self):
+        self.start()
+        self.guard('preflight', self.run_dir, '--expect', self.digest)
+        r = self.guard('preflight', self.run_dir, '--expect', '0' * 16, ok=False)
+        self.assertIn('digest', r.stdout)
+
+    def test_baseline_requires_real_block_and_fields(self):
+        cases = ('text ## Baseline\nCOMMAND: x\nRESULT: r\n',
+                 '## Baseline\nRESULT: r\n', '## Baseline\nCOMMAND: x\nRESULT: \t\n',
+                 '## Baseline\nCOMMAND: \nRESULT: r\n',
+                 '## Baseline\ntext COMMAND: x\nRESULT: r\n',
+                 '<!-- ## Baseline -->\nCOMMAND: x\nRESULT: r\n')
+        self.start()
+        for baseline in cases:
+            with self.subTest(baseline=baseline):
+                (self.run_dir / 'EXPERIMENTS.md').write_text(baseline + ITER.format(n=1))
+                r = self.guard('preflight', self.run_dir, ok=False)
+                self.assertIn('Baseline', r.stdout)
+
+    def test_iteration_headings_are_exact_and_consecutive(self):
+        self.start()
+        for numbers in ((0,), (2,), (1, 1), (1, 3), (1, 2, 2), ('01',), ('1 extra',), ('one',)):
+            with self.subTest(numbers=numbers):
+                text = BASELINE + ''.join(ITER.format(n=n) for n in numbers)
+                (self.run_dir / 'EXPERIMENTS.md').write_text(text)
+                r = self.guard('preflight', self.run_dir, ok=False)
+                self.assertIn('Iteration', r.stdout)
+        (self.run_dir / 'EXPERIMENTS.md').write_text(BASELINE + ITER.format(n=1) + ITER.format(n=2))
+        self.guard('preflight', self.run_dir)
+
+    def test_log_rejects_placeholders_in_every_field(self):
+        self.start()
+        cases = (('Baseline', 'COMMAND: x'), ('Baseline', 'RESULT: fail'),
+                 ('Iteration 1', 'CHANGE: c'), ('Iteration 1', 'WHY: w'),
+                 ('Iteration 1', 'RESULT: r'), ('Iteration 1', 'DECISION: keep'))
+        for block, field in cases:
+            with self.subTest(field=field):
+                text = (BASELINE + ITER.format(n=1)).replace(field, field + ' <the one thing changed this iteration>')
+                (self.run_dir / 'EXPERIMENTS.md').write_text(text)
+                r = self.guard('preflight', self.run_dir, ok=False)
+                self.assertRegex(r.stdout, 'FAIL - ' + block + '.*placeholder')
+
+    def test_iteration_decision_must_be_keep_or_revert(self):
+        self.start()
+        for decision in ('maybe', 'KEEP', 'keep because it works', 'revert later'):
+            with self.subTest(decision=decision):
+                text = BASELINE + ITER.format(n=1).replace('DECISION: keep', 'DECISION: ' + decision)
+                (self.run_dir / 'EXPERIMENTS.md').write_text(text)
+                r = self.guard('preflight', self.run_dir, ok=False)
+                self.assertRegex(r.stdout, 'FAIL - Iteration 1:.*DECISION')
+        (self.run_dir / 'EXPERIMENTS.md').write_text(BASELINE + ITER.format(n=1).replace('keep', 'revert'))
+        self.guard('preflight', self.run_dir)
+
+    def test_log_rejects_html_comments_anywhere(self):
+        self.start()
+        for text, block in (('<!-- template -->\n' + BASELINE + ITER.format(n=1), 'preamble'),
+                            (BASELINE + '<!-- note -->\n' + ITER.format(n=1), 'Baseline'),
+                            (BASELINE + ITER.format(n=1) + '<!-- note', 'Iteration 1'),
+                            ('<!--\n' + BASELINE + '-->\n' + ITER.format(n=1), 'preamble')):
+            with self.subTest(block=block, text=text):
+                (self.run_dir / 'EXPERIMENTS.md').write_text(text)
+                r = self.guard('preflight', self.run_dir, ok=False)
+                self.assertRegex(r.stdout, 'FAIL - ' + block + '.*HTML comment')
+
+    def test_rubric_requires_all_sections(self):
+        for section in ('Goal', 'Protected files', 'Criteria'):
+            with self.subTest(section=section):
+                text = RUBRIC.format(check='true', expect='').replace('## ' + section, '## Other')
+                self.assert_bad_rubric(text)
+
+    def test_rubric_requires_nonempty_goal(self):
+        self.assert_bad_rubric(RUBRIC.format(check='true', expect='').replace('code.txt exists and is not empty', '  '))
+
+    def test_rubric_requires_protected_entries_or_none(self):
+        for replacement in ('', '- ', '- (none)\n- test.txt'):
+            with self.subTest(replacement=replacement):
+                self.assert_bad_rubric(RUBRIC.format(check='true', expect='').replace('- test.txt', replacement))
+        self.start(freeze=False)
+        (self.run_dir / 'RUBRIC.md').write_text(RUBRIC.format(check='true', expect='').replace('- test.txt', '- (none)'))
+        self.guard('freeze', self.run_dir)
+        self.guard('preflight', self.run_dir)
+
+    def test_rubric_rejects_placeholders_and_comments(self):
+        base = RUBRIC.format(check='true', expect='EXPECT: output')
+        variants = (base.replace('CHECK: true', 'CHECK: <command>'),
+                    base.replace('code.txt exists and is not empty', '<goal>'),
+                    base.replace('- test.txt', '- <path>'),
+                    base.replace('EXPECT: output', 'EXPECT: <substring>'),
+                    base.replace('MANUAL: Is code.txt readable?', 'MANUAL: <yes/no question>'),
+                    base + '<!-- template -->\n')
+        for text in variants:
+            with self.subTest(text=text):
+                self.assert_bad_rubric(text)
+
+    def test_rubric_ids_are_consecutive(self):
+        for old, new in (('C2:', 'C3:'), ('C1:', 'C0:'), ('C1:', 'C01:')):
+            with self.subTest(new=new):
+                self.assert_bad_rubric(RUBRIC.format(check='true', expect='').replace(old, new))
+
+    def test_finish_uses_highest_numeric_verdict(self):
+        for lower, higher in (('99', '100'), ('01', '2'), ('9', '10')):
+            for newest_passes in (False, True):
+                with self.subTest(lower=lower, higher=higher, newest_passes=newest_passes):
+                    self.start()
+                    failed = VERDICT.replace('OVERALL: PASS', 'OVERALL: FAIL')
+                    (self.run_dir / ('VERDICT-' + lower + '.md')).write_text(failed if newest_passes else VERDICT)
+                    (self.run_dir / ('VERDICT-' + higher + '.md')).write_text(VERDICT if newest_passes else failed)
+                    state = (self.run_dir / 'STATE.json').read_bytes()
+                    r = self.guard('finish', self.run_dir, 'pass', '--expect', self.digest, ok=newest_passes)
+                    if newest_passes:
+                        saved = json.loads((self.run_dir / 'STATE.json').read_text())
+                        self.assertEqual(saved['verdicts'], ['VERDICT-' + lower + '.md', 'VERDICT-' + higher + '.md'])
+                    else:
+                        self.assertIn('VERDICT-' + higher + '.md', r.stdout)
+                        self.assertEqual((self.run_dir / 'STATE.json').read_bytes(), state)
+
+    def test_finish_rejects_fail_line_even_with_overall_pass(self):
+        for line in ('GUARDS: FAIL - broken', 'C1: FAIL - broken', '**C12**: FAIL', '> GUARDS: FAIL'):
+            with self.subTest(line=line):
+                self.start()
+                (self.run_dir / 'VERDICT-01.md').write_text(line + '\n' + VERDICT)
+                state = (self.run_dir / 'STATE.json').read_bytes()
+                r = self.guard('finish', self.run_dir, 'pass', '--expect', self.digest, ok=False)
+                self.assertIn('verdict contains a FAIL line', r.stdout)
+                self.assertEqual((self.run_dir / 'STATE.json').read_bytes(), state)
+
+    def test_deeply_nested_freeze_has_concise_format_error(self):
+        self.start()
+        (self.run_dir / 'FREEZE.json').write_text('[' * 100000 + ']' * 100000)
+        self.assert_format_error('guards')
+
+    def test_unexpected_command_exception_has_concise_format_error(self):
+        code = ("import runpy, sys; ns = runpy.run_path(sys.argv[1]); "
+                "ns['main'].__globals__['dispatch'] = lambda a: "
+                "(_ for _ in ()).throw(RuntimeError('unexpected\\nproblem')); "
+                "sys.argv = ['loop_guard.py', 'checks']; sys.exit(ns['main']())")
+        r = subprocess.run([sys.executable, '-c', code, str(GUARD)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(r.stdout, 'CHECKS: FAIL - unexpected problem\n')
+        self.assertEqual(r.stderr, '')
+
+    def test_checks_rejects_rubric_changed_after_freeze(self):
+        self.start()
+        p = self.run_dir / 'RUBRIC.md'
+        p.write_text(p.read_text().replace('test -s code.txt', 'true'))
+        r = self.guard('checks', self.run_dir, ok=False)
+        self.assertIn('RUBRIC.md changed after freeze', r.stdout)
+        self.assertNotIn('C1: OK', r.stdout)
+
+    def test_checks_runs_draft_before_freeze(self):
+        self.start(freeze=False)
+        self.guard('checks', self.run_dir)
+        (self.ws / 'code.txt').write_text('')
+        self.guard('checks', self.run_dir, ok=False)
+
+    def test_finished_run_is_immutable_and_identical_status_is_idempotent(self):
+        for initial in ('pass', 'stopped', 'failed'):
+            with self.subTest(initial=initial):
+                self.start()
+                (self.run_dir / 'VERDICT-01.md').write_text(VERDICT)
+                self.guard('finish', self.run_dir, initial, '--expect', self.digest, 'original')
+                state = (self.run_dir / 'STATE.json').read_bytes()
+                for requested in ('pass', 'stopped', 'failed'):
+                    with self.subTest(requested=requested):
+                        r = self.guard('finish', self.run_dir, requested, '--expect', self.digest,
+                                       'different note', ok=requested == initial)
+                        self.assertIn('run already finished: ' + initial, r.stdout)
+                        self.assertEqual((self.run_dir / 'STATE.json').read_bytes(), state)
+
+    def test_usage_documents_preflight_expected_digest(self):
+        r = self.guard('unknown', code=2)
+        self.assertIn('preflight <run_dir> [--expect D]', r.stdout)
+
+    def test_log_rejects_placeholder_in_preamble_field(self):
+        self.start()
+        text = 'COMMAND: <command>\n' + BASELINE + ITER.format(n=1)
+        (self.run_dir / 'EXPERIMENTS.md').write_text(text)
+        r = self.guard('preflight', self.run_dir, ok=False)
+        self.assertIn('preamble: placeholder in COMMAND', r.stdout)
+
+    def test_autocrlf_crlf_file_is_unanchored_at_freeze(self):
+        git(self.ws, 'init', '-q')
+        git(self.ws, 'config', 'core.autocrlf', 'true')
+        self.commit()
+        (self.ws / 'test.txt').write_bytes(b'strict\r\n')
+        self.start()
+        self.assertEqual(self.frozen()['anchors']['test.txt']['anchor'], 'none')
+        self.assertEqual(self.frozen()['anchors']['test.txt']['reason'], 'differs from HEAD')
+
+    def test_missing_goal_diagnostic_names_missing_section(self):
+        self.start(freeze=False)
+        text = RUBRIC.format(check='true', expect='').replace('## Goal', '## Other')
+        (self.run_dir / 'RUBRIC.md').write_text(text)
+        r = self.guard('freeze', self.run_dir, code=2)
+        self.assertIn('missing section Goal', r.stdout)
+        self.assertFalse((self.run_dir / 'FREEZE.json').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

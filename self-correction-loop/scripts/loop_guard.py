@@ -5,7 +5,7 @@ Usage: python3 loop_guard.py init <ws> <slug> --request-file F
        python3 loop_guard.py freeze <run_dir>
        python3 loop_guard.py guards <run_dir> [--expect D]
        python3 loop_guard.py checks <run_dir>
-       python3 loop_guard.py preflight <run_dir>
+       python3 loop_guard.py preflight <run_dir> [--expect D]
        python3 loop_guard.py finish <run_dir> pass --expect D [note]
        python3 loop_guard.py finish <run_dir> {stopped|failed} [note]
 
@@ -166,7 +166,11 @@ def cmd_init(ws, slug, request_file):
 
 def parse_rubric(text):
     """Return (sections, protected_paths, criteria). criteria: list of dicts."""
+    if "<!--" in text:
+        raise ValueError("RUBRIC.md: HTML comment remains")
     sections = set()
+    goal = []
+    no_protected = False
     protected, criteria, cur, sec = [], [], None, None
     for line in text.splitlines():
         if line.startswith("## "):
@@ -176,9 +180,19 @@ def parse_rubric(text):
             sections.add(sec)
             cur = None
             continue
+        if sec == "Goal":
+            if re.search(r'<[^>]*>', line):
+                raise ValueError("RUBRIC.md: placeholder in Goal")
+            goal.append(line)
         if sec == "Protected files" and line.startswith("- "):
             p = line[2:].strip()
-            if p != "(none)":
+            if not p:
+                raise ValueError("RUBRIC.md: empty protected path")
+            if re.search(r'<[^>]*>', p):
+                raise ValueError("RUBRIC.md: placeholder in protected path")
+            if p == "(none)":
+                no_protected = True
+            else:
                 protected.append(p)
         if sec == "Criteria":
             m = re.match(r"^### (C\d+):\s*(.*)$", line)
@@ -192,6 +206,8 @@ def parse_rubric(text):
                     raise ValueError("RUBRIC.md: field without a criterion")
                 field, value = line.split(":", 1)
                 value = value.strip()
+                if re.search(r'<[^>]*>', value):
+                    raise ValueError("RUBRIC.md: placeholder in " + cur["id"] + " " + field)
                 if field in ("CHECK", "MANUAL") and not value:
                     raise ValueError("RUBRIC.md: empty " + field + " in " + cur["id"])
                 if field == "CHECK":
@@ -204,7 +220,18 @@ def parse_rubric(text):
                     if cur["manual"] is not None:
                         raise ValueError("RUBRIC.md: duplicate MANUAL in " + cur["id"])
                     cur["manual"] = value
-    for c in criteria:
+    for required in ("Goal", "Protected files", "Criteria"):
+        if required not in sections:
+            raise ValueError("RUBRIC.md: missing section " + required)
+    if not "".join(goal).strip():
+        raise ValueError("RUBRIC.md: empty Goal")
+    if not protected and not no_protected:
+        raise ValueError("RUBRIC.md: Protected files requires a path or - (none)")
+    if protected and no_protected:
+        raise ValueError("RUBRIC.md: Protected files mixes (none) with paths")
+    for number, c in enumerate(criteria, 1):
+        if c["id"] != f"C{number}":
+            raise ValueError(f"RUBRIC.md: expected C{number}, got {c['id']}")
         if bool(c["check"]) == bool(c["manual"]):
             raise ValueError("RUBRIC.md: " + c["id"] + " requires exactly one CHECK or MANUAL")
     return sections, protected, criteria
@@ -218,7 +245,7 @@ def git_anchor(ws, path):
     rc, blob = git(ws, 'rev-parse', '--verify', head + ':./' + path)
     if rc:
         return {'anchor': 'none', 'reason': 'not committed at HEAD', 'head': head}
-    rc, cur = git(ws, 'hash-object', '--', path)
+    rc, cur = git(ws, 'hash-object', '--no-filters', '--', path)
     if rc or cur != blob:
         return {'anchor': 'none', 'reason': 'differs from HEAD', 'head': head}
     return {'anchor': 'git', 'head': head, 'blob': blob}
@@ -226,7 +253,7 @@ def git_anchor(ws, path):
 
 def anchor_ok(ws, path, item):
     rc, blob = git(ws, 'rev-parse', '--verify', item['head'] + ':./' + path)
-    rc2, cur = git(ws, 'hash-object', '--', path)
+    rc2, cur = git(ws, 'hash-object', '--no-filters', '--', path)
     return not rc and not rc2 and blob == item['blob'] == cur
 
 
@@ -331,6 +358,11 @@ def checks(loop_dir):
     _, _, criteria = parse_rubric(read_text(os.path.join(loop_dir, "RUBRIC.md")))
     if not criteria:
         raise ValueError("RUBRIC.md: no criteria")
+    frz = os.path.join(loop_dir, "FREEZE.json")
+    if os.path.exists(frz):
+        data = read_freeze(frz)
+        if sha256(os.path.join(loop_dir, "RUBRIC.md")) != data["rubric_sha256"]:
+            return say("CHECKS", False, "RUBRIC.md changed after freeze")
     ok = True
     for c in criteria:
         if c["manual"] and not c["check"]:
@@ -352,7 +384,7 @@ def checks(loop_dir):
     return ok
 
 
-def preflight(loop_dir):
+def preflight(loop_dir, expect=None):
     loop_dir, _ = paths(loop_dir)
     read_state(os.path.join(loop_dir, "STATE.json"))
     if os.path.exists(os.path.join(loop_dir, "FREEZE.json")):
@@ -371,28 +403,55 @@ def preflight(loop_dir):
         ok = say("PREFLIGHT", s in sections, f"RUBRIC.md section '## {s}'") and ok
     n_c = sum(c["id"].startswith("C") for c in criteria)
     ok = say("PREFLIGHT", n_c > 0, f"{n_c} criteria") and ok
-    ok = say("PREFLIGHT", "## Baseline" in exp, "EXPERIMENTS.md '## Baseline'") and ok
+    block_name = 'preamble'
+    for line in exp.splitlines():
+        if line.startswith('## '):
+            block_name = line[3:]
+        if '<!--' in line:
+            ok = say('PREFLIGHT', False, f'{block_name}: HTML comment in EXPERIMENTS.md') and ok
+        field = re.match(r'^(COMMAND|RESULT|CHANGE|WHY|DECISION):(.*)$', line)
+        if field and re.search(r'<[^>]*>', field.group(2)):
+            ok = say('PREFLIGHT', False, f'{block_name}: placeholder in {field.group(1)}') and ok
     blocks = re.split(r'^## ', exp, flags=re.M)[1:]
-    iters = [b for b in blocks if re.match(r'Iteration \d+', b)]
+    baselines = [b for b in blocks if b.startswith('Baseline')]
+    ok = say('PREFLIGHT', bool(baselines), 'EXPERIMENTS.md Baseline block') and ok
+    for b in baselines:
+        missing = [f for f in ('COMMAND:', 'RESULT:')
+                   if not re.search(rf'^{f}[ \t]*\S', b, re.M)]
+        ok = say('PREFLIGHT', not missing, 'Baseline: ' +
+                 ('missing ' + ' '.join(missing) if missing else 'complete')) and ok
+    iters = [b for b in blocks if b.startswith('Iteration')]
     ok = say('PREFLIGHT', len(iters) >= 1, f'{len(iters)} iteration block(s)') and ok
-    for b in iters:
-        name = b.splitlines()[0].strip()
+    for number, b in enumerate(iters, 1):
+        name = b.splitlines()[0]
+        ok = say('PREFLIGHT', name == f'Iteration {number}',
+                 f'{name}: expected ## Iteration {number}') and ok
         missing = [f for f in ('CHANGE:', 'WHY:', 'RESULT:', 'DECISION:')
                    if not re.search(rf'^{f}[ \t]*\S', b, re.M)]
         ok = say('PREFLIGHT', not missing, f"{name}: {'complete' if not missing else 'missing ' + ' '.join(missing)}") and ok
-    ok = guards(loop_dir) and ok
+        decisions = re.findall(r'^DECISION:(.*)$', b, re.M)
+        ok = say('PREFLIGHT', bool(decisions) and all(d.strip() in ('keep', 'revert') for d in decisions),
+                 f'{name}: DECISION must be keep or revert') and ok
+    ok = guards(loop_dir, expect) and ok
     ok = checks(loop_dir) and ok
     print("PREFLIGHT: ALL OK - ready for the verifier" if ok else "PREFLIGHT: FAILED - fix before spawning the verifier")
     return ok
 
 
+def verdict_names(run_dir):
+    names = [f for f in os.listdir(run_dir) if re.fullmatch(r"VERDICT-[0-9]+\.md", f)]
+    return sorted(names, key=lambda f: (int(f[8:-3]), f))
+
+
 def read_verdict(run_dir):
     """Return the highest-numbered verdict and its last non-empty line's result."""
-    names = sorted(f for f in os.listdir(run_dir) if re.match(r"VERDICT-\d{2}\.md$", f))
+    names = verdict_names(run_dir)
     if not names:
         return None, None
     with open(os.path.join(run_dir, names[-1]), encoding="utf-8") as f:
         lines = [line.strip() for line in f.read().splitlines() if line.strip()]
+    if any(re.match(r"^\W*(GUARDS|C\d+)\W*:\s*FAIL", line) for line in lines):
+        return names[-1], "FAIL"
     overall = "PASS" if lines and re.match(r"^\W*OVERALL:\s*PASS\W*$", lines[-1]) else None
     return names[-1], overall
 
@@ -404,6 +463,10 @@ def cmd_finish(run_dir, status, note, expect=None):
               "finish <run_dir> {stopped|failed} [note]")
         return 2
     st = read_state(p)
+    if st["status"] in ("pass", "stopped", "failed"):
+        same = st["status"] == status
+        say("FINISH", same, "run already finished: " + st["status"])
+        return 0 if same else 1
     if status == "pass":
         if not expect:
             say("FINISH", False, "pass requires --expect <digest>; STATE.json unchanged")
@@ -413,16 +476,22 @@ def cmd_finish(run_dir, status, note, expect=None):
         why = None
         if name is None:
             why = "no VERDICT-NN.md in the run directory (save the verifier's reply first)"
+        elif overall == "FAIL":
+            why = f"{name}: verdict contains a FAIL line"
         elif overall != "PASS":
             why = f"{name} does not end with 'OVERALL: PASS'"
-        elif not guards(run, expect):
-            why = "guards failed after the verdict"
+        else:
+            try:
+                if not preflight(run, expect):
+                    why = "preflight failed after the verdict (see failed part above)"
+            except (OSError, ValueError) as e:
+                why = "preflight failed: " + " ".join(str(e).splitlines())
         if why:
             print(f"FINISH: FAIL - pass refused: {why}. STATE.json unchanged.")
             return 1
     st.update({"status": status, "finished_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
                "note": note,
-               "verdicts": sorted(f for f in os.listdir(os.path.dirname(p)) if re.match(r"VERDICT-\d{2}\.md$", f))})
+               "verdicts": verdict_names(os.path.dirname(p))})
     with open(p, "w", encoding="utf-8") as f:
         json.dump(st, f, indent=2, ensure_ascii=False)
     print(f"FINISH: OK - status={status}")
@@ -438,8 +507,8 @@ def dispatch(a):
         return 0 if guards(a[1], a[3] if len(a) == 4 else None) else 1
     if len(a) == 2 and a[0] == "checks":
         return 0 if checks(a[1]) else 1
-    if len(a) == 2 and a[0] == "preflight":
-        return 0 if preflight(a[1]) else 1
+    if a and a[0] == "preflight" and (len(a) == 2 or (len(a) == 4 and a[2] == "--expect")):
+        return 0 if preflight(a[1], a[3] if len(a) == 4 else None) else 1
     if len(a) >= 3 and a[0] == "finish":
         if len(a) >= 4 and a[3] == "--expect":
             if len(a) < 5:
@@ -457,7 +526,7 @@ def main():
     try:
         with contextlib.redirect_stdout(output):
             result = dispatch(a)
-    except (OSError, ValueError) as e:
+    except Exception as e:
         say(a[0].upper() if a else "USAGE", False, " ".join(str(e).splitlines()))
         return 2
     print(output.getvalue(), end="")
