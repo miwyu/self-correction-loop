@@ -61,7 +61,8 @@ Run directory: {{RUN_DIR}}
 2. Run: python3 {{GUARD}} guards {{RUN_DIR}} --expect {{FREEZE_DIGEST}}
    Exit 0 = the frozen rubric, request and protected files are unchanged.
    For each "GUARDS: NOTE - unanchored" line, name the file in your GUARDS
-   evidence. If its reason is "differs from HEAD", read the git diff of that
+   evidence. A NOTE alone does not make GUARDS FAIL: it says the file has no
+   committed copy to compare against. If its reason is "differs from HEAD", read the git diff of that
    file against the commit recorded as its "head" in {{RUN_DIR}}/FREEZE.json; a
    diff that removes or weakens checks without the request allowing it makes
    GUARDS FAIL.

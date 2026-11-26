@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A skill-development project for the **self-correction-loop** Claude Code skill
 ([self-correction-loop/SKILL.md](self-correction-loop/SKILL.md)): a rubric-driven
-iterate-until-verified loop (isolate work in a disposable worktree → write
-checkable rubric with anti-gaming guards → baseline → one change per iteration
-with an experiment log → independent verifier sub-agent → stop only on a
-passing verdict). The skill is developed
+iterate-until-verified loop (isolate work in a disposable worktree → a
+separate rubric author writes and freezes the checkable rubric → baseline →
+one change per iteration with an experiment log → independent verifier
+sub-agent → `loop_guard.py finish` closes the run). The skill is developed
 with the skill-creator plugin's eval loop: run test prompts with and without
 the skill, grade against assertions, review in a browser viewer, revise,
 repeat.
@@ -17,16 +17,17 @@ repeat.
 ## Layout
 
 - `self-correction-loop/` — the skill itself; the product of this repo.
-  `SKILL.md` (numbered steps + MUST/NEVER rules + thresholds, ~145 lines),
-  `references/` (verbatim templates: rubric, experiments log, verifier
-  prompt; plus `rationale.md` holding the design "why"), and `scripts/`
-  (`check_guards.sh` — sha256 verification of protected files;
-  `preflight.sh` — format + guards + CHECK-command gate run before the
-  verifier). `jp/self-correction-loop/` is its Japanese mirror: every skill
-  change lands in both trees in the same commit, kept in exact structural
-  sync (same heading/bullet skeleton; scripts code-identical with translated
-  comments; the verifier-prompt body stays English because its verdict
-  format is parsed — verify with a structural diff before committing).
+  `SKILL.md` (numbered steps + MUST/NEVER rules + thresholds, ~195 lines),
+  `references/` (verbatim templates: rubric, experiments log, the two role
+  prompts for the rubric author and the verifier; plus `rationale.md`
+  holding the design "why"), and `scripts/loop_guard.py` (Python 3 standard
+  library only: `init`, `freeze`, `guards`, `checks`, `preflight`, `finish`).
+  There is no Japanese mirror of the skill; only `README.jp.md` is translated.
+- `tests/test_loop_guard.py` — unit tests for the gate, including the ways a
+  worker could rewrite its own records. Run
+  `python3 -m unittest discover -s tests` before every commit that touches
+  `scripts/` or a template: the gate reads its placeholder tokens from the
+  shipped templates, so a template edit can change what it rejects.
 - `evals/evals.json` — 4 test cases with prompts and assertions; input
   fixtures live in `evals/files/<eval-name>/`. Assertions cover task success,
   anti-gaming guards (fixture files byte-identical, no hardcoded answers,
@@ -125,6 +126,30 @@ fable-side iteration.
 - Sonnet triggering stays probabilistic even with the hardened description:
   12/12 in the final full measurement but 11/12 in an intermediate revision
   — treat ~1-in-12 undertrigger as residual risk N=3 evals may miss.
-- The former open item (unanchored guard criteria) is closed: Protected
-  files carry sha256 anchors recorded pre-work, checked mechanically by
-  `check_guards.sh` from worker, preflight, and verifier alike.
+- Everything above this line describes the pre-`loop_guard.py` skill. The
+  benchmark numbers and the `sonnet-opt` harness were measured on it and
+  have not been re-run on the current one.
+
+## Trust-boundary round (2026-11, branch trust-boundary)
+
+The sha256 anchors of the previous round lived in `RUBRIC.md`, which the
+worker wrote, and the guard scripts were copied into the workspace; a worker
+could rewrite both. This round replaced the two bash scripts with
+`scripts/loop_guard.py`, moved rubric writing to a separate sub-agent,
+froze the result (`FREEZE.json`), tied the freeze to committed git blobs and
+to a digest the rubric author returns, and made `finish pass` re-run
+preflight. What it does not stop is listed in `README.md` and
+`references/rationale.md`.
+
+Measured headless with `claude -p --model claude-sonnet-5`, 3 scenarios
+(plain failing tests, uncommitted changes, an unsatisfiable test) plus one
+held-out scenario, 4 revisions: the new skill succeeded in 17 of 17 runs (one
+early run saved the verdict without the verifier's first line; the text was
+then tightened); the previous skill completed 5 of 5 but in 1 of 2
+unsatisfiable-test runs stopped without fixing or logging anything. The
+runs repeat a few scenarios, so these are not rates. Wall time rose from
+43–135 s to 183–371 s per run (one more sub-agent). The planned stopping
+rule — two consecutive rounds with no newly reported ambiguity — was not
+met in 4 rounds; behaviour was correct throughout, the self-reports kept
+naming something. The trust boundary itself is shown by the unit tests, not
+by these runs: honest runs cannot show it.
