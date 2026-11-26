@@ -6,15 +6,77 @@ Usage: python3 loop_guard.py init <ws> <slug> --request-file F
        python3 loop_guard.py guards <run_dir> [--expect D]
        python3 loop_guard.py checks <run_dir>
        python3 loop_guard.py preflight <run_dir>
-       python3 loop_guard.py finish <run_dir> {pass|stopped|failed} [note]
+       python3 loop_guard.py finish <run_dir> pass --expect D [note]
+       python3 loop_guard.py finish <run_dir> {stopped|failed} [note]
 
 Runs live in <ws>/.loop/YYYYMMDD-HHMM-<slug>; CHECKs run in <ws>
 without a shell. EXPECT lines must occur in stdout + stderr.
 Exit 0 = OK, 1 = check/guard failure, 2 = usage or format error.
 """
-import datetime, hashlib, json, os, re, shlex, subprocess, sys
+import contextlib, datetime, hashlib, io, json, os, re, shlex, subprocess, sys
 
-TIMEOUT = int(os.environ.get("LOOP_CHECK_TIMEOUT", "600"))
+try:
+    TIMEOUT = int(os.environ.get("LOOP_CHECK_TIMEOUT", "600"))
+    if TIMEOUT <= 0:
+        TIMEOUT = 600
+except ValueError:
+    TIMEOUT = 600
+
+
+def read_text(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def read_object(path):
+    data = json.loads(read_text(path))
+    if not isinstance(data, dict):
+        raise ValueError(os.path.basename(path) + " must be a JSON object")
+    return data
+
+
+def read_state(path):
+    data = read_object(path)
+    for key in ("status", "started_at", "skill_sha256", "workspace"):
+        if not isinstance(data.get(key), str) or not data[key]:
+            raise ValueError("STATE.json: missing or invalid " + key)
+    if "git" not in data or (data["git"] is not None and not isinstance(data["git"], dict)):
+        raise ValueError("STATE.json: missing or invalid git")
+    info = data["git"]
+    if info is not None:
+        for key in ("head", "branch"):
+            if key not in info or (info[key] is not None and not isinstance(info[key], str)):
+                raise ValueError("STATE.json: missing or invalid git." + key)
+        if (not isinstance(info.get("status_porcelain"), list)
+                or any(not isinstance(v, str) for v in info["status_porcelain"])):
+            raise ValueError("STATE.json: invalid git.status_porcelain")
+    for key in ("finished_at", "note"):
+        if key in data and not isinstance(data[key], str) and not (key == "note" and data[key] is None):
+            raise ValueError("STATE.json: invalid " + key)
+    if "verdicts" in data and (not isinstance(data["verdicts"], list)
+                              or any(not isinstance(v, str) for v in data["verdicts"])):
+        raise ValueError("STATE.json: invalid verdicts")
+    return data
+
+
+def read_freeze(path):
+    data = read_object(path)
+    if not isinstance(data.get("rubric_sha256"), str) or not isinstance(data.get("protected"), dict):
+        raise ValueError("FREEZE.json: missing or invalid rubric_sha256/protected")
+    if any(not isinstance(v, str) for v in data["protected"].values()):
+        raise ValueError("FREEZE.json: invalid protected hash")
+    if "request_sha256" in data and not isinstance(data["request_sha256"], str):
+        raise ValueError("FREEZE.json: invalid request_sha256")
+    if "anchors" in data:
+        if not isinstance(data["anchors"], dict):
+            raise ValueError("FREEZE.json: invalid anchors")
+        for item in data["anchors"].values():
+            if not isinstance(item, dict) or item.get("anchor") not in ("git", "none"):
+                raise ValueError("FREEZE.json: invalid anchor entry")
+            keys = ("head", "blob") if item["anchor"] == "git" else ("reason",)
+            if any(not isinstance(item.get(k), str) or not item[k] for k in keys):
+                raise ValueError("FREEZE.json: missing or invalid anchor fields")
+    return data
 
 
 def sha256(path):
@@ -36,7 +98,7 @@ SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 def git(ws, *args):
     try:
         r = subprocess.run(["git", "-C", ws, *args], capture_output=True, text=True, timeout=30)
-        return r.returncode, r.stdout
+        return r.returncode, r.stdout.rstrip("\n")
     except (OSError, subprocess.TimeoutExpired):
         return 1, ""
 
@@ -104,11 +166,15 @@ def cmd_init(ws, slug, request_file):
 
 def parse_rubric(text):
     """Return (sections, protected_paths, criteria). criteria: list of dicts."""
-    sections = set(re.findall(r"^## (.+?)\s*$", text, re.M))
+    sections = set()
     protected, criteria, cur, sec = [], [], None, None
     for line in text.splitlines():
         if line.startswith("## "):
             sec = line[3:].strip()
+            if sec in sections and sec in ("Goal", "Protected files", "Criteria"):
+                raise ValueError("RUBRIC.md: duplicate section " + sec)
+            sections.add(sec)
+            cur = None
             continue
         if sec == "Protected files" and line.startswith("- "):
             p = line[2:].strip()
@@ -117,42 +183,50 @@ def parse_rubric(text):
         if sec == "Criteria":
             m = re.match(r"^### (C\d+):\s*(.*)$", line)
             if m:
+                if any(c["id"] == m.group(1) for c in criteria):
+                    raise ValueError("RUBRIC.md: duplicate criterion " + m.group(1))
                 cur = {"id": m.group(1), "name": m.group(2), "check": None, "expect": [], "manual": None}
                 criteria.append(cur)
-            elif cur and line.startswith("CHECK: "):
-                cur["check"] = line[7:].strip()
-            elif cur and line.startswith("EXPECT: "):
-                cur["expect"].append(line[8:].strip())
-            elif cur and line.startswith("MANUAL: "):
-                cur["manual"] = line[8:].strip()
+            elif line.startswith(("CHECK:", "EXPECT:", "MANUAL:")):
+                if cur is None:
+                    raise ValueError("RUBRIC.md: field without a criterion")
+                field, value = line.split(":", 1)
+                value = value.strip()
+                if field in ("CHECK", "MANUAL") and not value:
+                    raise ValueError("RUBRIC.md: empty " + field + " in " + cur["id"])
+                if field == "CHECK":
+                    if cur["check"] is not None:
+                        raise ValueError("RUBRIC.md: duplicate CHECK in " + cur["id"])
+                    cur["check"] = value
+                elif field == "EXPECT":
+                    cur["expect"].append(value)
+                else:
+                    if cur["manual"] is not None:
+                        raise ValueError("RUBRIC.md: duplicate MANUAL in " + cur["id"])
+                    cur["manual"] = value
+    for c in criteria:
+        if bool(c["check"]) == bool(c["manual"]):
+            raise ValueError("RUBRIC.md: " + c["id"] + " requires exactly one CHECK or MANUAL")
     return sections, protected, criteria
-
-
-def _git(ws, *args):
-    try:
-        r = subprocess.run(['git', '-C', ws, *args], capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return 1, ''
-    return r.returncode, r.stdout.strip()
 
 
 def git_anchor(ws, path):
     """Tie a protected file to a committed blob: a reference the run records cannot rewrite."""
-    rc, head = _git(ws, 'rev-parse', '--verify', 'HEAD')
+    rc, head = git(ws, 'rev-parse', '--verify', 'HEAD')
     if rc:
         return {'anchor': 'none', 'reason': 'no git commit'}
-    rc, blob = _git(ws, 'rev-parse', '--verify', head + ':./' + path)
+    rc, blob = git(ws, 'rev-parse', '--verify', head + ':./' + path)
     if rc:
         return {'anchor': 'none', 'reason': 'not committed at HEAD', 'head': head}
-    rc, cur = _git(ws, 'hash-object', '--', path)
+    rc, cur = git(ws, 'hash-object', '--', path)
     if rc or cur != blob:
         return {'anchor': 'none', 'reason': 'differs from HEAD', 'head': head}
     return {'anchor': 'git', 'head': head, 'blob': blob}
 
 
 def anchor_ok(ws, path, item):
-    rc, blob = _git(ws, 'rev-parse', '--verify', item['head'] + ':./' + path)
-    rc2, cur = _git(ws, 'hash-object', '--', path)
+    rc, blob = git(ws, 'rev-parse', '--verify', item['head'] + ':./' + path)
+    rc2, cur = git(ws, 'hash-object', '--', path)
     return not rc and not rc2 and blob == item['blob'] == cur
 
 
@@ -165,25 +239,42 @@ def say(tag, ok, msg):
     return ok
 
 
+def protected_path(ws, path):
+    """Use the same validated workspace-relative spelling at freeze and guard time."""
+    if os.path.isabs(path) or ".." in path.split(os.sep):
+        raise ValueError("unsafe protected path: " + path)
+    ws = os.path.realpath(ws)
+    full = os.path.join(ws, path)
+    real = os.path.realpath(full)
+    if os.path.commonpath((ws, real)) != ws or real == ws:
+        raise ValueError("protected path outside workspace: " + path)
+    if os.path.islink(full):
+        raise ValueError("protected path is a symlink: " + path)
+    if not os.path.isfile(full):
+        raise ValueError("protected file missing: " + path)
+    return full
+
+
 def cmd_freeze(loop_dir):
     loop_dir, ws = paths(loop_dir)
     rub, frz = os.path.join(loop_dir, "RUBRIC.md"), os.path.join(loop_dir, "FREEZE.json")
     if os.path.exists(frz):
-        return say("FREEZE", False, "FREEZE.json already exists; refusing to re-freeze") and 0 or 2
+        say("FREEZE", False, "FREEZE.json already exists; refusing to re-freeze")
+        return 2
     req = os.path.join(loop_dir, "REQUEST.md")
     if not os.path.isfile(req) or not os.path.getsize(req):
-        return say("FREEZE", False, "REQUEST.md missing or empty") and 0 or 2
+        say("FREEZE", False, "REQUEST.md missing or empty")
+        return 2
     if not os.path.isfile(rub):
-        return say("FREEZE", False, "RUBRIC.md missing") and 0 or 2
-    _, protected, criteria = parse_rubric(open(rub, encoding="utf-8").read())
+        say("FREEZE", False, "RUBRIC.md missing")
+        return 2
+    _, protected, criteria = parse_rubric(read_text(rub))
     if not any(c["id"].startswith("C") for c in criteria):
-        return say("FREEZE", False, "no '### C<n>:' criteria") and 0 or 2
+        say("FREEZE", False, "no '### C<n>:' criteria")
+        return 2
     files = {}
     for p in protected:
-        full = os.path.normpath(os.path.join(ws, p))
-        if not full.startswith(ws + os.sep) or not os.path.isfile(full):
-            return say("FREEZE", False, f"protected path missing or outside workspace: {p}") and 0 or 2
-        files[p] = sha256(full)
+        files[p] = sha256(protected_path(ws, p))
     data = {"rubric_sha256": sha256(rub), "request_sha256": sha256(req),
             "protected": files, "anchors": {p: git_anchor(ws, p) for p in protected}}
     with open(frz, "x", encoding="utf-8") as f:
@@ -198,16 +289,22 @@ def guards(loop_dir, expect=None):
     if not os.path.isfile(frz):
         say("GUARDS", False, "FREEZE.json missing (rubric was never frozen)")
         return False
-    data = json.load(open(frz, encoding="utf-8"))
+    data = read_freeze(frz)
+    if ("anchors" not in data or "request_sha256" not in data
+            or any(p not in data["anchors"] for p in data["protected"])):
+        return say("GUARDS", False, "FREEZE.json is incomplete")
     ok = True
     rub = os.path.join(loop_dir, "RUBRIC.md")
-    if not os.path.isfile(rub) or sha256(rub) != data["rubric_sha256"]:
+    read_text(rub)
+    if sha256(rub) != data["rubric_sha256"]:
         ok = say("GUARDS", False, "RUBRIC.md changed after freeze") and ok
     for p, want in data["protected"].items():
-        full = os.path.join(ws, p)
-        if not os.path.isfile(full):
-            ok = say("GUARDS", False, f"protected file missing: {p}") and ok
-        elif sha256(full) != want:
+        try:
+            full = protected_path(ws, p)
+        except ValueError as e:
+            ok = say("GUARDS", False, str(e)) and ok
+            continue
+        if sha256(full) != want:
             ok = say("GUARDS", False, f"protected file modified: {p}") and ok
         else:
             say("GUARDS", True, f"{p} unchanged")
@@ -231,7 +328,9 @@ def guards(loop_dir, expect=None):
 
 def checks(loop_dir):
     loop_dir, ws = paths(loop_dir)
-    _, _, criteria = parse_rubric(open(os.path.join(loop_dir, "RUBRIC.md"), encoding="utf-8").read())
+    _, _, criteria = parse_rubric(read_text(os.path.join(loop_dir, "RUBRIC.md")))
+    if not criteria:
+        raise ValueError("RUBRIC.md: no criteria")
     ok = True
     for c in criteria:
         if c["manual"] and not c["check"]:
@@ -255,18 +354,23 @@ def checks(loop_dir):
 
 def preflight(loop_dir):
     loop_dir, _ = paths(loop_dir)
+    read_state(os.path.join(loop_dir, "STATE.json"))
+    if os.path.exists(os.path.join(loop_dir, "FREEZE.json")):
+        read_freeze(os.path.join(loop_dir, "FREEZE.json"))
+    # Read required text before presence gates so unreadable input is a format error.
+    rubric = read_text(os.path.join(loop_dir, "RUBRIC.md"))
+    exp = read_text(os.path.join(loop_dir, "EXPERIMENTS.md"))
     ok = True
     for f in ("STATE.json", "REQUEST.md", "RUBRIC.md", "EXPERIMENTS.md", "FREEZE.json"):
         p = os.path.join(loop_dir, f)
         ok = say("PREFLIGHT", os.path.isfile(p) and os.path.getsize(p) > 0, f"{f} present") and ok
     if not ok:
         return False
-    sections, _, criteria = parse_rubric(open(os.path.join(loop_dir, "RUBRIC.md"), encoding="utf-8").read())
+    sections, _, criteria = parse_rubric(rubric)
     for s in ("Goal", "Protected files", "Criteria"):
         ok = say("PREFLIGHT", s in sections, f"RUBRIC.md section '## {s}'") and ok
     n_c = sum(c["id"].startswith("C") for c in criteria)
     ok = say("PREFLIGHT", n_c > 0, f"{n_c} criteria") and ok
-    exp = open(os.path.join(loop_dir, "EXPERIMENTS.md"), encoding="utf-8").read()
     ok = say("PREFLIGHT", "## Baseline" in exp, "EXPERIMENTS.md '## Baseline'") and ok
     blocks = re.split(r'^## ', exp, flags=re.M)[1:]
     iters = [b for b in blocks if re.match(r'Iteration \d+', b)]
@@ -274,7 +378,7 @@ def preflight(loop_dir):
     for b in iters:
         name = b.splitlines()[0].strip()
         missing = [f for f in ('CHANGE:', 'WHY:', 'RESULT:', 'DECISION:')
-                   if not re.search(rf'^{f}\s*\S', b, re.M)]
+                   if not re.search(rf'^{f}[ \t]*\S', b, re.M)]
         ok = say('PREFLIGHT', not missing, f"{name}: {'complete' if not missing else 'missing ' + ' '.join(missing)}") and ok
     ok = guards(loop_dir) and ok
     ok = checks(loop_dir) and ok
@@ -289,17 +393,21 @@ def read_verdict(run_dir):
         return None, None
     with open(os.path.join(run_dir, names[-1]), encoding="utf-8") as f:
         lines = [line.strip() for line in f.read().splitlines() if line.strip()]
-    overall = "PASS" if lines and lines[-1] == "OVERALL: PASS" else None
+    overall = "PASS" if lines and re.match(r"^\W*OVERALL:\s*PASS\W*$", lines[-1]) else None
     return names[-1], overall
 
 
-def cmd_finish(run_dir, status, note):
+def cmd_finish(run_dir, status, note, expect=None):
     p = os.path.join(os.path.abspath(run_dir), "STATE.json")
     if status not in ("pass", "stopped", "failed") or not os.path.isfile(p):
-        print("FINISH: FAIL - usage: finish <run_dir> {pass|stopped|failed} [note]")
+        print("FINISH: FAIL - usage: finish <run_dir> pass --expect <digest> [note]; "
+              "finish <run_dir> {stopped|failed} [note]")
         return 2
-    st = json.load(open(p, encoding="utf-8"))
+    st = read_state(p)
     if status == "pass":
+        if not expect:
+            say("FINISH", False, "pass requires --expect <digest>; STATE.json unchanged")
+            return 1
         run = os.path.dirname(p)
         name, overall = read_verdict(run)
         why = None
@@ -307,7 +415,7 @@ def cmd_finish(run_dir, status, note):
             why = "no VERDICT-NN.md in the run directory (save the verifier's reply first)"
         elif overall != "PASS":
             why = f"{name} does not end with 'OVERALL: PASS'"
-        elif not guards(run):
+        elif not guards(run, expect):
             why = "guards failed after the verdict"
         if why:
             print(f"FINISH: FAIL - pass refused: {why}. STATE.json unchanged.")
@@ -321,8 +429,7 @@ def cmd_finish(run_dir, status, note):
     return 0
 
 
-def main():
-    a = sys.argv[1:]
+def dispatch(a):
     if len(a) == 5 and a[0] == "init" and a[3] == "--request-file":
         return cmd_init(a[1], a[2], a[4])
     if len(a) == 2 and a[0] == "freeze":
@@ -334,9 +441,27 @@ def main():
     if len(a) == 2 and a[0] == "preflight":
         return 0 if preflight(a[1]) else 1
     if len(a) >= 3 and a[0] == "finish":
+        if len(a) >= 4 and a[3] == "--expect":
+            if len(a) < 5:
+                say("FINISH", False, "--expect requires a digest")
+                return 2
+            return cmd_finish(a[1], a[2], " ".join(a[5:]) or None, a[4])
         return cmd_finish(a[1], a[2], " ".join(a[3:]) or None)
     print(__doc__)
     return 2
+
+
+def main():
+    a = sys.argv[1:]
+    output = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(output):
+            result = dispatch(a)
+    except (OSError, ValueError) as e:
+        say(a[0].upper() if a else "USAGE", False, " ".join(str(e).splitlines()))
+        return 2
+    print(output.getvalue(), end="")
+    return result
 
 
 if __name__ == "__main__":
