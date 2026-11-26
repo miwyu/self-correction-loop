@@ -68,7 +68,8 @@ prints it. Its files have fixed names: `STATE.json`, `REQUEST.md`,
    `<ws>` = cwd. Skip to Step 1.
 2. If the cwd **is** a git repository — judged after any setup command the
    user told you to run first: work in a disposable worktree — via
-   EnterWorktree in Claude Code, else `git worktree add ../<repo>-loop -b <branch>`
+   EnterWorktree in Claude Code (this step is the explicit instruction that
+   tool asks for), else `git worktree add ../<repo>-loop -b <branch>`
    (sibling of the repo). `<ws>` = the worktree.
    - **Dirty-state guard:** worktrees start from the committed state. Run
      `git status` first; copy any uncommitted files the task touches into the
@@ -134,8 +135,9 @@ change.
 **Impossible criterion:** if you can show that no deliverable can satisfy the
 frozen criteria (two checks demand opposite results, a CHECK cannot run), do
 not wait for the plateau rule and do not touch the rubric. Keep the changes
-that fix real defects, log them as iterations, then go to Step 5 as
-**stopped** and ask the user which criterion is right.
+that fix defects the other checks agree on, log them as iterations (one
+iteration is enough if it fixes them), then go to Step 5 as **stopped** and
+ask the user which criterion is right.
 
 ## Step 4: Preflight, then verify
 
