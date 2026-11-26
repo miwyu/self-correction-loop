@@ -34,8 +34,9 @@ prints it. Its files have fixed names: `STATE.json`, `REQUEST.md`,
 
 - **MUST M1:** claim success only after, in this session and in this order:
   `GUARD preflight <run>` exited 0, **then** a verifier sub-agent's reply ended
-  `OVERALL: PASS`, **then** `GUARD finish <run> pass --expect <digest>` exited 0. Any edit to the
-  deliverable after a verdict needs a new verdict.
+  `OVERALL: PASS`, **then** `GUARD finish <run> pass --expect <digest>`
+  exited 0. An edit to the deliverable after a verdict voids that verdict:
+  go back to Step 4.
 - **MUST M2:** pass the two prompts in `<skill_dir>/references/role-prompts.md`
   verbatim; replace only the `{{...}}` placeholders. Never add your summary,
   diff, or reasoning.
@@ -47,12 +48,14 @@ prints it. Its files have fixed names: `STATE.json`, `REQUEST.md`,
   the user's audit trail; the user removes it after review.
 - **NEVER N3:** copy expected outputs, test cases, or scorer internals into
   the solution, and never make the solution detect that it is under test.
-- **NEVER N4:** write helper or checker files; the loop's only files are the
-  ones `<run>` lists above.
+- **NEVER N4:** write helper or checker files. Besides the task's own
+  deliverables, the only files you create are `<ws>/.loop/request.txt` and
+  the `<run>` files listed above.
 - **NEVER N5:** `git init` a repo the user didn't ask for, or commit to the
   user's branch.
-- **NEVER N6:** after `OVERALL: PASS`, run anything except `GUARD finish` and
-  the read-only git commands the Step 5 report needs.
+- **NEVER N6:** once you have saved a verdict ending `OVERALL: PASS`, run
+  nothing except `GUARD finish` and the read-only git commands the Step 5
+  report needs. (`finish` re-runs the checks itself.)
 
 ## Step 0: Choose the workspace
 
@@ -75,7 +78,8 @@ prints it. Its files have fixed names: `STATE.json`, `REQUEST.md`,
 
 ## Step 1: Start the run and get the rubric frozen (before any work on the task)
 
-1. Write the user's request, word for word, to `<ws>/.loop/request.txt`.
+1. Write the user's request, word for word, to `<ws>/.loop/request.txt`
+   (create the `.loop` directory if it is missing).
 2. Run `GUARD init <ws> <slug> --request-file <ws>/.loop/request.txt`
    (`<slug>`: lowercase words joined by `-`, at most 30 characters, e.g.
    `cart-rounding`). The first line it prints is `<run>`.
@@ -84,17 +88,20 @@ prints it. Its files have fixed names: `STATE.json`, `REQUEST.md`,
    `<skill_dir>/references/rubric-template.md`) and `{{GUARD}}` (absolute path
    of `loop_guard.py`), and spawn a sub-agent (Agent tool) with that text.
    Do no work on the task until it replies.
-4. From its reply, note the `digest=` value on the `FREEZE: OK` line; Steps 4
-   and 5 need it. Run
-   `GUARD guards <run> --expect <digest>`; exit 0 is required. Tell the user
-   the digest and every `GUARDS: NOTE` line in one short message.
-   If the author could not freeze, fix nothing yourself: report to the user.
+4. If its reply has no `FREEZE: OK` line, fix nothing yourself: run
+   `GUARD finish <run> stopped "rubric not frozen"` and report the author's
+   error to the user.
+5. Otherwise note the `digest=` value on the `FREEZE: OK` line; Steps 4 and 5
+   need it. Run `GUARD guards <run> --expect <digest>`; exit 0 is required.
+   Tell the user the digest and every `GUARDS: NOTE` line in one short message.
 
 ## Step 2: Baseline
 
 Copy `<skill_dir>/references/experiments-template.md` to
 `<run>/EXPERIMENTS.md`. Run `GUARD checks <run>` once before changing
-anything and record its output lines under `## Baseline`.
+anything and record its output lines under `## Baseline`. If every CHECK
+already passes, make no change: fill `## Iteration 1` with
+`CHANGE: none (baseline already passes)` and go to Step 4.
 
 ## Step 3: Iterate
 
@@ -103,8 +110,9 @@ Per iteration:
 1. Change **one** thing (M3) — the change you expect to help most. One thing
    = one cause: one bug, one parameter, one algorithm swap.
 2. Run `GUARD checks <run>` (cheap, no sub-agent).
-3. Append an `## Iteration N` block to EXPERIMENTS.md
-   (CHANGE / WHY / RESULT / DECISION — the template fixes the fields).
+3. Log it in EXPERIMENTS.md (CHANGE / WHY / RESULT / DECISION): fill the
+   template's `## Iteration 1` block for the first iteration, then append
+   `## Iteration 2`, `## Iteration 3`, ... Leave no `<placeholder>` text.
 4. In a worktree: commit the iteration — only files the task is supposed to
    change (`.loop/` is excluded and stays untracked).
 
@@ -123,26 +131,31 @@ that fix real defects, log them as iterations, then go to Step 5 as
 
 ## Step 4: Preflight, then verify
 
-1. Run `GUARD preflight <run>`. Exit 0 required; on failure, fix and return
-   to Step 3. Do not spawn a verifier while preflight fails.
+1. Run `GUARD preflight <run>`. Exit 0 required. A failing CHECK or a log
+   format error is yours to fix: return to Step 3. A failure about RUBRIC.md,
+   REQUEST.md, FREEZE.json or a protected file is not: go to Step 5 as
+   **stopped**. Do not spawn a verifier while preflight fails.
 2. Take the **Verifier** prompt from `role-prompts.md`, replace `{{WS}}`,
    `{{RUN_DIR}}`, `{{GUARD}}` and `{{FREEZE_DIGEST}}` (the digest from Step 1),
    and spawn a fresh sub-agent with that text (M2).
 3. Save its whole reply, unchanged, as `<run>/VERDICT-NN.md` (01, 02, ...).
    A reply without an `OVERALL:` line is not a verdict: save nothing and
-   spawn a fresh verifier with the same prompt.
+   spawn a fresh verifier with the same prompt, at most twice; after that go
+   to Step 5 as **stopped**.
 4. Last line `OVERALL: PASS` → Step 5. Any FAIL → its evidence is the next
    iteration's input; return to Step 3. Don't re-grade or argue with the
    verdict. If a FAIL says the rubric itself is wrong (`rubric gap`, a
-   criterion that cannot hold), stop and ask the user instead of iterating.
+   criterion that cannot hold), do not iterate: go to Step 5 as **stopped**
+   and ask the user. A changed rubric needs a new run (Step 1) with the
+   user's answer added to the request; the old run stays as it is.
 
 ## Step 5: Finish and report
 
 Run exactly one of:
 
 - `GUARD finish <run> pass --expect <digest>` — only after `OVERALL: PASS`.
-  It refuses unless the newest `VERDICT-NN.md` ends with that line and the
-  guards, checked against the Step 1 digest, still hold.
+  It re-runs preflight against the Step 1 digest and refuses unless that
+  passes and the newest `VERDICT-NN.md` ends with `OVERALL: PASS`.
 - `GUARD finish <run> stopped "<one-line reason>"` — budget exhausted,
   impossible criterion, or a question for the user.
 - `GUARD finish <run> failed "<one-line reason>"` — the work cannot meet the
@@ -153,10 +166,8 @@ Then report, and stop:
 - **Success** (M1 satisfied): the verdict lines, baseline → final result,
   iterations used, the freeze digest, any `GUARDS: NOTE` lines, and `<run>`.
   - Worktree mode: hand back the fix only — branch name, diff summary, exact
-    landing steps (merge, or `git checkout <branch> -- <files>`). Prescribing
-    is the default; apply it yourself only when losing user work is provably
-    impossible (clean checkout, or the diff contains the user's uncommitted
-    content), and say which you did. Give cleanup commands for after review:
+    landing steps (merge, or `git checkout <branch> -- <files>`). Prescribe
+    them; do not land the fix yourself. Give cleanup commands for after review:
     `git worktree remove --force <path>` (the `--force` deletes the untracked
     `.loop/`), then delete the branch.
   - Fallback mode: note in one line that `<ws>/.loop/` remains and how to

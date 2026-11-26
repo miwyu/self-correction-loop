@@ -13,23 +13,33 @@ Workspace root: {{WS}}
 Run directory: {{RUN_DIR}}
 The user's request, verbatim: {{RUN_DIR}}/REQUEST.md
 
-1. Read the request and the workspace files it concerns. Do not modify any file
-   outside {{RUN_DIR}} and do not attempt the task.
+1. Read the request and the workspace files it concerns. Do not attempt the
+   task. The only file you write is {{RUN_DIR}}/RUBRIC.md; caches that the
+   check commands create by themselves are fine.
 2. Read {{TEMPLATE}} and write {{RUN_DIR}}/RUBRIC.md from it.
    - Protected files: every test, scorer, fixture or rubric the request forbids
-     changing or that defines success. When in doubt, protect it.
-   - Criteria: the user's stated command verbatim as a CHECK. When the task could
-     be met by special-casing the visible inputs, add one CHECK on an input the
-     visible tests do not use. MANUAL only when no command can decide. Do not
-     copy expected outputs or test contents into the rubric.
+     changing or that defines success. When in doubt, protect it. Only regular
+     files inside the workspace can be listed; if one that matters is outside
+     it or is a symlink, leave it out and say so in your reply.
+   - Criteria: the user's stated command, word for word, as a CHECK. CHECKs run
+     without a shell: if the user's command needs a pipe, a redirect or an
+     environment variable, write a CHECK that runs the same program and put the
+     required output in EXPECT. A success marker the user named (such as
+     "SCORE: 20/20") belongs in EXPECT. When the task could be met by
+     special-casing the visible inputs, add one CHECK on an input the visible
+     tests do not use. MANUAL only when no command can decide. Do not copy
+     per-case expected answers or test contents into the rubric.
    - Write no helper or checker files. Every CHECK calls the task's own commands
      or a single `python3 -c "..."` line.
-3. Before freezing, run every CHECK once from the workspace root. A failing
-   assertion is a valid baseline. A CHECK that cannot run (missing tool, bad
-   quoting, wrong path) is a defect: repair it. Never weaken a requirement to
-   make the baseline pass. If two requirements contradict each other, keep
+3. Before freezing, run: python3 {{GUARD}} checks {{RUN_DIR}}
+   It runs every CHECK the way the loop will. A failing assertion is a valid
+   baseline. A CHECK that cannot run (missing tool, bad quoting, wrong path)
+   is a defect: repair RUBRIC.md and run it again. Never weaken a requirement
+   to make the baseline pass. If two requirements contradict each other, keep
    both as written and say so in your reply.
-4. Run: python3 {{GUARD}} freeze {{RUN_DIR}}   (must print FREEZE: OK)
+4. Run: python3 {{GUARD}} freeze {{RUN_DIR}}
+   It must print a line starting "FREEZE: OK". If it prints an error, repair
+   RUBRIC.md and run it again; if you cannot, reply with the error and stop.
 5. Run: python3 {{GUARD}} guards {{RUN_DIR}}
 Reply with the RUBRIC.md text, the FREEZE: OK line including its digest, each
 CHECK's baseline result, and every GUARDS: NOTE line.
@@ -49,8 +59,9 @@ Run directory: {{RUN_DIR}}
    Exit 0 = the frozen rubric, request and protected files are unchanged.
    For each "GUARDS: NOTE - unanchored" line, name the file in your GUARDS
    evidence. If its reason is "differs from HEAD", read the git diff of that
-   file against HEAD; a diff that removes or weakens checks without the request
-   allowing it makes GUARDS FAIL.
+   file against the commit recorded as its "head" in {{RUN_DIR}}/FREEZE.json; a
+   diff that removes or weakens checks without the request allowing it makes
+   GUARDS FAIL.
    If the request states a requirement or prohibition that no criterion or
    protected file covers, GUARDS is FAIL with evidence "rubric gap: <words>".
 3. Run: python3 {{GUARD}} checks {{RUN_DIR}}
@@ -60,7 +71,8 @@ Run directory: {{RUN_DIR}}
 4. Be skeptical: look for the criterion that does NOT hold, and for
    special-casing of the visible test inputs in the changed files.
 5. Every verdict needs one line of concrete evidence. No evidence = FAIL.
-6. Do not modify, create or delete any file.
+6. Do not modify, create or delete any file yourself; caches that the check
+   commands create by themselves are fine.
 
 Reply with exactly these lines and nothing after the last one:
 GUARDS: PASS|FAIL - <evidence>
